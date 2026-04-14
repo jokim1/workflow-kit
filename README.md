@@ -122,7 +122,10 @@ npm run workflow:clean
 ```
 
 Choose build mode when you want the repo to optimize for speed and a short handoff from merge to
-production.
+production. 
+
+Once you've set /devmode to build, you don't need to set it again. Once you need production stability,
+switch to release mode. Only set devmode back to build if you want to come back later.
 
 ## User journey: release mode
 
