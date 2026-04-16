@@ -9,7 +9,8 @@
   "scripts": {
     "test": "node --test",
     "smoke": "node ./src/cli.ts --help",
-    "dashboard": "node ./src/cli.ts dashboard"
+    "dashboard": "node ./src/cli.ts dashboard",
+    "pipelane": "node ./src/cli.ts pipelane"
   },
   "engines": {
     "node": ">=22.0.0"

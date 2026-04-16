@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { handlePipelane } from './dashboard/launcher.ts';
 import { getDashboardOptions, startDashboardServer } from './dashboard/server.ts';
 import { installCodexWrappers } from './operator/codex-install.ts';
 import { initConsumerRepo, setupConsumerRepo, syncDocsOnly } from './operator/docs.ts';
@@ -19,9 +20,12 @@ Commands:
   sync-docs
   install-codex
   dashboard [--repo <repo-root>] [--host <host>] [--port <port>]
+  pipelane [stop|status] [--repo <repo-root>] [--port <port>] [--no-open]
   run <workflow command...>
 
 Examples:
+  workflow-kit pipelane
+  workflow-kit pipelane stop
   workflow-kit dashboard --repo /Users/josephkim/dev/rocketboard
   workflow-kit run new --task "My Task"
 `);
@@ -77,6 +81,11 @@ async function main(): Promise<void> {
   if (command === 'dashboard') {
     const options = getDashboardOptions(rest, process.cwd());
     await startDashboardServer(options);
+    return;
+  }
+
+  if (command === 'pipelane') {
+    await handlePipelane(rest, process.cwd());
     return;
   }
 
