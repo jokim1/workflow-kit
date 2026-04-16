@@ -1329,8 +1329,8 @@
       <section class="panel">
         <div class="hero">
           <div>
-            <h1 class="hero-title" id="hero-title">Branch Pipeline Board</h1>
-            <p class="hero-copy" id="hero-copy">This view is driven directly from Rocketboard’s public workflow:api contract. Click any branch to inspect lane reasons, row actions, changed files, and lazy patch previews.</p>
+            <h1 class="hero-title" id="hero-title">Pipelane</h1>
+            <p class="hero-copy" id="hero-copy">This view is driven directly from your repo's public workflow:api contract. Click any branch to inspect lane reasons, row actions, changed files, and lazy patch previews.</p>
             <div class="pill-row" id="hero-pills"></div>
           </div>
           <div class="hero-actions">
@@ -1424,8 +1424,8 @@
   </div>
 
   <script>
-    const DEFAULT_BOARD_TITLE = 'Branch Pipeline Board';
-    const DEFAULT_BOARD_SUBTITLE = 'Opinionated workflow board for branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.';
+    const DEFAULT_BOARD_TITLE = 'Pipelane';
+    const DEFAULT_BOARD_SUBTITLE = 'Pipelane — the release cockpit for AI vibe coders. Branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.';
 
     const state = {
       health: null,
@@ -1558,7 +1558,7 @@
         <form class="settings-form" id="settings-form">
           <label class="settings-field">
             <span class="settings-label">Board Name</span>
-            <input class="settings-input" type="text" data-settings-field="boardTitle" value="${escapeHtml(settings.boardTitle || '')}" placeholder="Branch Pipeline Board">
+            <input class="settings-input" type="text" data-settings-field="boardTitle" value="${escapeHtml(settings.boardTitle || '')}" placeholder="Pipelane">
           </label>
 
           <label class="settings-field">

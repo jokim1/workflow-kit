@@ -1,7 +1,8 @@
-# Branch Pipeline Board
+# Pipelane Board
 
-The Branch Pipeline Board is `workflow-kit`'s opinionated reference design for a local workflow
-dashboard.
+The Pipelane Board is the web cockpit of **Pipelane** — the release
+workflow system for AI vibe coders. It is an opinionated reference design
+for a local workflow dashboard.
 
 It is meant to make AI-first developers more effective at running a branch-based release workflow
 without forcing product repos to ship a first-party dashboard.
