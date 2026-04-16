@@ -1,6 +1,6 @@
 # Dashboard Implementation Guide
 
-This folder contains `workflow-kit`'s local Branch Pipeline Board reference implementation.
+This folder contains `workflow-kit`'s local Pipelane Board reference implementation.
 
 Files:
 
@@ -81,8 +81,8 @@ Current settings schema:
 
 ```json
 {
-  "boardTitle": "Rocketboard Branch Pipeline Board",
-  "boardSubtitle": "Opinionated workflow board for branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.",
+  "boardTitle": "Rocketboard Pipelane",
+  "boardSubtitle": "Pipelane — the release cockpit for AI vibe coders. Branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.",
   "preferredPort": 3033,
   "autoRefreshSeconds": 30
 }

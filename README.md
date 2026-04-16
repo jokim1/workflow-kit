@@ -62,12 +62,12 @@ follow it safely and a human can predict what will happen next.
 - tracked Claude command files
 - generic Codex slash wrappers
 - a reusable release workflow doc for new maintainers
-- a local Branch Pipeline Board reference dashboard for workflow-aware repos
+- a local Pipelane Board reference dashboard for workflow-aware repos
 
-## Branch Pipeline Board
+## Pipelane Board
 
-`workflow-kit` ships a local reference dashboard for repos that expose a public `workflow:api`
-surface.
+`workflow-kit` ships a local reference dashboard — the **Pipelane Board** — for repos that expose
+a public `workflow:api` surface.
 
 Run it against a target repo:
 
@@ -103,7 +103,7 @@ Use the board's Settings button to customize:
 
 Docs:
 
-- [Branch Pipeline Board reference design](docs/BRANCH_PIPELINE_BOARD.md)
+- [Pipelane Board reference design](docs/PIPELANE_BOARD.md)
 - [Dashboard implementation guide](src/dashboard/README.md)
 
 ## Two dev modes

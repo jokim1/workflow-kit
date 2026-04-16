@@ -62,7 +62,7 @@ interface DashboardSettings {
   autoRefreshSeconds: number;
 }
 
-const DEFAULT_BOARD_SUBTITLE = 'Opinionated workflow board for branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.';
+const DEFAULT_BOARD_SUBTITLE = 'Pipelane — the release cockpit for AI vibe coders. Branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.';
 const DEFAULT_AUTO_REFRESH_SECONDS = 30;
 
 function valueAfter(args: string[], flag: string): string {
@@ -91,7 +91,7 @@ function repoDashboardSlug(repoRoot: string): string {
 function defaultDashboardSettings(repoRoot: string): DashboardSettings {
   const repoName = path.basename(path.resolve(repoRoot)) || 'Repo';
   return {
-    boardTitle: `${repoName} Branch Pipeline Board`,
+    boardTitle: `${repoName} Pipelane`,
     boardSubtitle: DEFAULT_BOARD_SUBTITLE,
     preferredPort: DEFAULT_PORT,
     autoRefreshSeconds: DEFAULT_AUTO_REFRESH_SECONDS,
