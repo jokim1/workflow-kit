@@ -3,15 +3,15 @@ Open the Pipelane Board — the visual release-pipeline dashboard for this repo.
 Run:
 
 ```bash
-npm run workflow:pipelane -- $ARGUMENTS
+npm run pipelane:board -- $ARGUMENTS
 ```
 
 Common forms:
 
 ```bash
-npm run workflow:pipelane            # start (if not already running) and open the browser
-npm run workflow:pipelane -- stop    # stop the Pipelane Board for this repo
-npm run workflow:pipelane -- status  # show URL, port, PID, log path
+npm run pipelane:board            # start (if not already running) and open the browser
+npm run pipelane:board -- stop    # stop the Pipelane Board for this repo
+npm run pipelane:board -- status  # show URL, port, PID, log path
 ```
 
 This command:
@@ -26,7 +26,7 @@ Options:
 - `--port <n>` — override the port for this invocation.
 - `--repo <path>` — point at a different repo (default: cwd).
 
-State lives under `~/.workflow-kit/dashboard/`:
+State lives under `~/.workflow-kit/dashboard/` (path retained across the workflow-kit → pipelane rename; a `~/.pipelane/dashboard/` migration ships in a follow-up release):
 
 - `pids/<slug>-<hash>.pid` — PID of the background dashboard
 - `logs/<slug>-<hash>.log` — dashboard stdout/stderr

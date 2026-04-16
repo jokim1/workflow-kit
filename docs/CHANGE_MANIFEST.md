@@ -696,7 +696,12 @@ After v1 ships:
 
 ## Phase v2 — Positioning + cuts
 
-### v2.1 — Package-level rename: `workflow-kit` → `pipelane`
+### v2.1 — Package-level rename: `workflow-kit` → `pipelane` [in-flight]
+
+**Status.** In flight as of this PR. Reorder from the original manifest:
+running before v0 correctness work because the cost is higher later
+(more dependents, a published update command referring to the old
+name, consumer-repo packages.json scripts to migrate twice).
 
 **Goal.** Finish what v0.9 started. Align the package name, bin, and
 all generator output with the Pipelane brand. The product identity and
