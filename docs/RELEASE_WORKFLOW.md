@@ -62,9 +62,9 @@ The slash surface is intentionally thin.
 
 There is no workflow logic inside the slash wrappers.
 
-### Local Branch Pipeline Board
+### Local Pipelane Board
 
-`workflow-kit` also ships a local dashboard reference design:
+`workflow-kit` also ships a local dashboard reference design — the **Pipelane Board**:
 
 ```bash
 npm run dashboard -- --repo /absolute/path/to/your/repo
