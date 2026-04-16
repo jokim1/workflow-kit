@@ -12,7 +12,8 @@ function valueAfter(args: string[], flag: string): string {
 }
 
 function printTopLevelHelp(): void {
-  process.stdout.write(`workflow-kit
+  process.stdout.write(`pipelane — release cockpit for AI vibe coders
+  (formerly workflow-kit; the \`workflow-kit\` bin still works as a shim)
 
 Commands:
   init --project "Project Name"
@@ -20,14 +21,14 @@ Commands:
   sync-docs
   install-codex
   dashboard [--repo <repo-root>] [--host <host>] [--port <port>]
-  pipelane [stop|status] [--repo <repo-root>] [--port <port>] [--no-open]
-  run <workflow command...>
+  board [stop|status] [--repo <repo-root>] [--port <port>] [--no-open]
+  run <operator command...>
 
 Examples:
-  workflow-kit pipelane
-  workflow-kit pipelane stop
-  workflow-kit dashboard --repo /Users/josephkim/dev/rocketboard
-  workflow-kit run new --task "My Task"
+  pipelane board
+  pipelane board stop
+  pipelane dashboard --repo /Users/josephkim/dev/rocketboard
+  pipelane run new --task "My Task"
 `);
 }
 
@@ -42,15 +43,15 @@ async function main(): Promise<void> {
   if (command === 'init') {
     const projectName = valueAfter(rest, '--project');
     if (!projectName.trim()) {
-      throw new Error('workflow-kit init requires --project "Project Name".');
+      throw new Error('pipelane init requires --project "Project Name".');
     }
 
     const result = initConsumerRepo(process.cwd(), projectName);
     process.stdout.write([
-      `Initialized workflow-kit in ${result.repoRoot}`,
+      `Initialized pipelane in ${result.repoRoot}`,
       `Config: ${result.configPath}`,
-      'Commit the tracked workflow files before using workflow:new from a remote-backed repo.',
-      'Next: run npm run workflow:setup',
+      'Commit the tracked workflow files before using pipelane:new from a remote-backed repo.',
+      'Next: run npm run pipelane:setup',
     ].join('\n') + '\n');
     return;
   }
@@ -58,7 +59,7 @@ async function main(): Promise<void> {
   if (command === 'setup') {
     const result = setupConsumerRepo(process.cwd());
     process.stdout.write([
-      `Workflow setup complete in ${result.repoRoot}`,
+      `Pipelane setup complete in ${result.repoRoot}`,
       result.createdClaude ? 'Created local CLAUDE.md from workflow template.' : 'Preserved existing local CLAUDE.md.',
       `Installed Codex wrappers in ${result.codexHome}`,
       `Wrappers: ${result.installedWrappers.join(', ')}`,
@@ -68,7 +69,7 @@ async function main(): Promise<void> {
 
   if (command === 'sync-docs') {
     const result = syncDocsOnly(process.cwd());
-    process.stdout.write(`Synced workflow docs for ${result.repoRoot}\n`);
+    process.stdout.write(`Synced Pipelane docs for ${result.repoRoot}\n`);
     return;
   }
 
@@ -84,7 +85,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (command === 'pipelane') {
+  // `board` is the canonical subcommand that opens the Pipelane Board.
+  // `pipelane` is kept as a legacy alias so the old `workflow-kit pipelane`
+  // muscle memory keeps working through the `workflow-kit` bin shim.
+  if (command === 'board' || command === 'pipelane') {
     await handlePipelane(rest, process.cwd());
     return;
   }

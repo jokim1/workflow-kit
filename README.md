@@ -1,12 +1,16 @@
-# workflow-kit
+# pipelane
 
-`workflow-kit` is a standalone workflow package for repo-native release management.
+> **pipelane** — the release cockpit for AI vibe coders.
+> _Formerly `workflow-kit`._ The `workflow-kit` name still works as a shim binary and
+> `workflow:*` npm scripts are retained as deprecation aliases for one release.
+
+`pipelane` is a standalone workflow package for repo-native release management.
 
 It is the repo-specific workflow layer that sits underneath your AI tools. Product repos keep a
 small tracked workflow contract, local prompts, and thin slash-command adapters. The operator
 logic itself lives here, versioned once.
 
-## Why workflow-kit exists
+## Why Pipelane exists
 
 AI-assisted coding is fast. That is the good news and the problem.
 
@@ -15,7 +19,7 @@ layer, you need a workflow that is easy for an AI to follow without improvising 
 behavior. You want deterministic commands, explicit task workspaces, recoverable state, and a
 release flow that is more disciplined than "just ship it."
 
-That is what `workflow-kit` is for.
+That is what Pipelane is for.
 
 It gives every repo the same reliable shape:
 
@@ -24,15 +28,16 @@ It gives every repo the same reliable shape:
 - explicit task workspace creation and recovery
 - machine-local operator state in `CLAUDE.md`
 - a documented split between fast build-mode shipping and protected release-mode promotion
+- a local Pipelane Board dashboard for visual pipeline status (`/pipelane`)
 
 ## Why it lives outside product repos
 
-`workflow-kit` is intentionally a separate repo.
+Pipelane is intentionally a separate repo.
 
 That keeps a clean boundary:
 
 - product repos own product code and repo-specific defaults
-- `workflow-kit` owns the shared workflow engine, templates, and docs
+- Pipelane owns the shared workflow engine, templates, and docs
 
 Without that split, product repos get muddy fast. It becomes unclear which logic is generic,
 which is project-specific, and which instructions are safe to carry forward into the next repo.

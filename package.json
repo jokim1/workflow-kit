@@ -1,16 +1,18 @@
 {
-  "name": "workflow-kit",
-  "version": "0.1.0",
+  "name": "pipelane",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "description": "Pipelane — release cockpit for AI vibe coders. Formerly workflow-kit.",
   "bin": {
+    "pipelane": "./bin/pipelane",
     "workflow-kit": "./bin/workflow-kit"
   },
   "scripts": {
     "test": "node --test",
     "smoke": "node ./src/cli.ts --help",
     "dashboard": "node ./src/cli.ts dashboard",
-    "pipelane": "node ./src/cli.ts pipelane"
+    "board": "node ./src/cli.ts board"
   },
   "engines": {
     "node": ">=22.0.0"

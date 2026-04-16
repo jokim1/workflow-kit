@@ -624,19 +624,25 @@ test('init writes tracked workflow files and setup seeds CLAUDE plus Codex wrapp
 
   try {
     const initResult = runCli(['init', '--project', 'Demo App'], repoRoot);
-    assert.match(initResult.stdout, /Initialized workflow-kit/);
+    assert.match(initResult.stdout, /Initialized pipelane/);
     assert.ok(existsSync(path.join(repoRoot, '.project-workflow.json')));
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'new.md')));
     assert.ok(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')));
 
     const setupResult = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
-    assert.match(setupResult.stdout, /Workflow setup complete/);
+    assert.match(setupResult.stdout, /[Pp]ipelane setup complete/);
     assert.ok(existsSync(path.join(repoRoot, 'CLAUDE.md')));
     assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
 
     const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-    assert.equal(packageJson.scripts['workflow:new'], 'workflow-kit run new');
-    assert.equal(packageJson.scripts['workflow:resume'], 'workflow-kit run resume');
+    // Canonical pipelane:* script names
+    assert.equal(packageJson.scripts['pipelane:new'], 'pipelane run new');
+    assert.equal(packageJson.scripts['pipelane:resume'], 'pipelane run resume');
+    assert.equal(packageJson.scripts['pipelane:board'], 'pipelane board');
+    // Deprecation aliases for one release window — keep working through
+    // the rename so existing Claude slash commands don't break.
+    assert.equal(packageJson.scripts['workflow:new'], 'pipelane run new');
+    assert.equal(packageJson.scripts['workflow:resume'], 'pipelane run resume');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });

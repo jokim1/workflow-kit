@@ -65,19 +65,33 @@ export function ensurePackageScripts(repoRoot: string): void {
     ? JSON.parse(readFileSync(targetPath, 'utf8')) as Record<string, unknown>
     : { name: path.basename(repoRoot), private: true, type: 'module', scripts: {} as Record<string, string> };
 
+  // Dual-name scripts: pipelane:* is canonical, workflow:* kept as a
+  // deprecation alias so existing muscle memory + Claude command files keep
+  // working through one release window after the rename.
   const scripts = {
     ...(typeof current.scripts === 'object' && current.scripts ? current.scripts as Record<string, string> : {}),
-    'workflow:setup': 'workflow-kit setup',
-    'workflow:devmode': 'workflow-kit run devmode',
-    'workflow:new': 'workflow-kit run new',
-    'workflow:resume': 'workflow-kit run resume',
-    'workflow:pr': 'workflow-kit run pr',
-    'workflow:merge': 'workflow-kit run merge',
-    'workflow:release-check': 'workflow-kit run release-check',
-    'workflow:task-lock': 'workflow-kit run task-lock',
-    'workflow:deploy': 'workflow-kit run deploy',
-    'workflow:clean': 'workflow-kit run clean',
-    'workflow:pipelane': 'workflow-kit pipelane',
+    'pipelane:setup': 'pipelane setup',
+    'pipelane:devmode': 'pipelane run devmode',
+    'pipelane:new': 'pipelane run new',
+    'pipelane:resume': 'pipelane run resume',
+    'pipelane:pr': 'pipelane run pr',
+    'pipelane:merge': 'pipelane run merge',
+    'pipelane:release-check': 'pipelane run release-check',
+    'pipelane:task-lock': 'pipelane run task-lock',
+    'pipelane:deploy': 'pipelane run deploy',
+    'pipelane:clean': 'pipelane run clean',
+    'pipelane:board': 'pipelane board',
+    'workflow:setup': 'pipelane setup',
+    'workflow:devmode': 'pipelane run devmode',
+    'workflow:new': 'pipelane run new',
+    'workflow:resume': 'pipelane run resume',
+    'workflow:pr': 'pipelane run pr',
+    'workflow:merge': 'pipelane run merge',
+    'workflow:release-check': 'pipelane run release-check',
+    'workflow:task-lock': 'pipelane run task-lock',
+    'workflow:deploy': 'pipelane run deploy',
+    'workflow:clean': 'pipelane run clean',
+    'workflow:pipelane': 'pipelane board',
   };
 
   const next = {
