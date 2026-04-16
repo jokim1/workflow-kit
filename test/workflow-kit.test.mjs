@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync,
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer as createNetServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -797,7 +798,7 @@ test('dashboard proxies workflow:api routes and persists local board settings', 
     assert.ok(health.settingsPath);
 
     const settingsBefore = await fetch(`${server.baseUrl}/api/settings`).then((response) => response.json());
-    assert.equal(settingsBefore.settings.boardTitle, `${path.basename(repoRoot)} Branch Pipeline Board`);
+    assert.equal(settingsBefore.settings.boardTitle, `${path.basename(repoRoot)} Pipelane`);
     assert.equal(settingsBefore.settings.preferredPort, 3033);
 
     const settingsUpdateResponse = await fetch(`${server.baseUrl}/api/settings`, {
@@ -869,4 +870,80 @@ test('dashboard proxies workflow:api routes and persists local board settings', 
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(fakeBin, { recursive: true, force: true });
   }
+});
+
+async function runCliAsync(args, cwd, env = {}) {
+  const child = spawn('node', [CLI_PATH, ...args], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+  child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+  const [code] = await once(child, 'exit');
+  return { status: code ?? 0, stdout, stderr };
+}
+
+test('pipelane detects a running dashboard and skips spawning a second one', async () => {
+  const repoRoot = createRepo();
+  const port = await getFreePort();
+  const probeHits = [];
+
+  const fakeServer = createHttpServer((req, res) => {
+    probeHits.push(req.url ?? '');
+    if (req.url === '/api/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, repoRoot }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  fakeServer.listen(port, '127.0.0.1');
+  await once(fakeServer, 'listening');
+
+  try {
+    const result = await runCliAsync(
+      ['pipelane', '--repo', repoRoot, '--port', String(port)],
+      repoRoot,
+      { PIPELANE_OPEN_COMMAND: 'skip' },
+    );
+
+    assert.equal(result.status, 0, `unexpected exit.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\nprobeHits: ${JSON.stringify(probeHits)}`);
+    assert.match(result.stdout, new RegExp(`already running at http://127\\.0\\.0\\.1:${port}`));
+    assert.ok(probeHits.includes('/api/health'), 'expected /api/health to be probed');
+  } finally {
+    fakeServer.close();
+    await once(fakeServer, 'close').catch(() => undefined);
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('pipelane status reports unreachable port and no PID file', async () => {
+  const repoRoot = createRepo();
+  const port = await getFreePort();
+
+  try {
+    const result = runCli(
+      ['pipelane', 'status', '--repo', repoRoot, '--port', String(port)],
+      repoRoot,
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Health: unreachable/);
+    assert.match(result.stdout, /PID:\s+no PID file/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('pipelane help prints subcommand list', () => {
+  const result = runCli(['pipelane', '--help'], process.cwd());
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /Usage: workflow-kit pipelane/);
+  assert.match(result.stdout, /start Pipelane Board/);
+  assert.match(result.stdout, /stop the Pipelane Board/);
+  assert.match(result.stdout, /--no-open/);
 });

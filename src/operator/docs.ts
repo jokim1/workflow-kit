@@ -77,6 +77,7 @@ export function ensurePackageScripts(repoRoot: string): void {
     'workflow:task-lock': 'workflow-kit run task-lock',
     'workflow:deploy': 'workflow-kit run deploy',
     'workflow:clean': 'workflow-kit run clean',
+    'workflow:pipelane': 'workflow-kit pipelane',
   };
 
   const next = {
@@ -92,7 +93,7 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
   mkdirSync(path.join(repoRoot, 'workflow'), { recursive: true });
   mkdirSync(path.join(repoRoot, 'docs'), { recursive: true });
 
-  const commandTemplates = ['devmode', 'new', 'resume', 'pr', 'merge', 'deploy', 'clean'];
+  const commandTemplates = ['devmode', 'new', 'resume', 'pr', 'merge', 'deploy', 'clean', 'pipelane'];
   for (const name of commandTemplates) {
     const rendered = renderTemplate(readTemplate(`.claude/commands/${name}.md`), config);
     writeFileSync(path.join(repoRoot, '.claude', 'commands', `${name}.md`), rendered, 'utf8');

@@ -13,7 +13,8 @@
     "pr": "/pr",
     "merge": "/merge",
     "deploy": "/deploy",
-    "clean": "/clean"
+    "clean": "/clean",
+    "pipelane": "/pipelane"
   },
   "prePrChecks": [
     "npm run test",
