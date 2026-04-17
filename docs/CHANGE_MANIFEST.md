@@ -24,6 +24,66 @@ focused sprint, v1 the week after, and v2 as a positioning follow-up.
 Every change below lists: **goal**, **files touched**, **acceptance
 criteria**, **rough effort**, and **dependencies**.
 
+## Revised sequencing (2026-04-16)
+
+The phase/version breakdown below (v0.0 → v2.x) is still the catalog of
+work. The **execution order** has changed since Phase 1 landed (Pipelane
+installed in Rocketboard, Pipelane Board renders Rocketboard's live
+`workflow:api`). The authoritative source of truth for sequencing is the
+resume plan at `~/.claude/plans/noble-conjuring-spring.md`; this prelude
+mirrors it.
+
+Ship items in this exact order. Each is its own PR in Pipelane unless
+noted. Catalog IDs reference the detailed sections below.
+
+1. **`/pipelane update`** — new work, not in the v0.x catalog. Adds a
+   `pipelane update` CLI subcommand + `/pipelane update` slash that
+   detects the installed commit, diffs against `jokim1/pipelane#main`,
+   and runs `npm install pipelane@github:jokim1/pipelane#main`. ~2 days.
+   Establishes the upgrade pattern Rocketboard will use for every future
+   Pipelane improvement.
+2. **Configurable branch prefix** — new work, not in the v0.x catalog.
+   Adds `branchPrefix` + `legacyBranchPrefixes` to `WorkflowConfig`;
+   unblocks Phase 3 because Rocketboard uses `task/` (with `codex/`
+   legacy) and Pipelane hardcodes `codex/`. ~0.5 day.
+3. **`workflow:api` port (v0.0)** — the biggest Phase 2 item. Mirrors
+   Rocketboard's `scripts/workflow-operator.mjs` envelope grammar,
+   snapshot, action registry, and confirm-token flow. ~4–5 days. See
+   [v0.0 below](#v00--port-workflowapi-into-workflow-kit).
+4. **`checks.*` plugin system** — new work, not in the v0.x catalog.
+   Ports Rocketboard-specific gates (function secret manifest, GH
+   required secrets) as optional plugins gated by
+   `.project-workflow.json:checks.*`. ~1 day. Keeps the Pipelane default
+   clean for other consumers.
+5. **Differential test harness** — new work, not in the v0.x catalog.
+   Side-by-side behavioral comparison between Rocketboard's operator
+   and Pipelane for all 11 commands + `api snapshot` + `api action`.
+   ~1 day. **Gate for Phase 3.**
+6. **v0 correctness fixes** — the pre-identified items from v0.1–v0.7
+   (`DeployRecord` schema, `deploy.ts` polling, `merge` SHA hardening,
+   `/pr` deny-list, typed-SHA prefix for prod, `/clean` hardening, kill
+   `ready:true` honor-system flag) plus anything else the differential
+   harness surfaces. When Pipelane's behavior diverges from
+   Rocketboard's buggy behavior on purpose, update the harness's
+   expected-output fixtures and note it in the PR.
+7. **Phase 3 Rocketboard swap** — one atomic PR in Rocketboard.
+   Adds `.project-workflow.json`, rewrites `package.json` scripts to
+   `pipelane run <cmd>`, deletes `scripts/workflow-operator.mjs`
+   (6,229 lines), regenerates `.claude/commands/*` via
+   `pipelane sync-docs`. Only merges if step 5 passes and step 6 is
+   landed.
+
+**Why this differs from the v0.x order below.** The original v0 plan
+targeted a stand-alone workflow-kit that produced its own envelope. The
+revised plan optimizes for **the Rocketboard swap as the forcing
+function**: `/pipelane update` (step 1) unlocks the dep-bump loop we'll
+use for every later improvement; configurable branch prefix (step 2) is
+a known Rocketboard-specific blocker; the differential harness (step 5)
+is how we prove Pipelane is wire-compatible before the swap. The v0.x
+catalog items that fall outside this path (`/status`, v0.8 dashboard
+merge, v0.9 brand rename) ride along as opportunistic work — they're
+not gating the Rocketboard swap.
+
 ## Architectural anchor: `workflow:api`
 
 After v0.0 lands, **every mutating command in Pipelane is an action
