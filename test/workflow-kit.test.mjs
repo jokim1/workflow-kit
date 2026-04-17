@@ -1365,6 +1365,417 @@ test('release-check does not count failed staging records as observed success', 
   }
 });
 
+// v4: pluggable checks. Enabled per-consumer via .project-workflow.json:checks.
+// Absent config = no plugins dispatched. These tests exercise each plugin's
+// dispatch gate and its pass/fail behavior.
+
+function writeProjectWorkflowChecks(repoRoot, checks) {
+  const configPath = path.join(repoRoot, '.project-workflow.json');
+  const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
+  cfg.checks = checks;
+  writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
+}
+
+function writeSecretManifest(repoRoot, manifest) {
+  const manifestDir = path.join(repoRoot, 'supabase', 'functions');
+  mkdirSync(manifestDir, { recursive: true });
+  writeFileSync(path.join(manifestDir, 'secrets.manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+}
+
+test('checks: no dispatch when .project-workflow.json has no checks block', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 0);
+    assert.equal(output.ready, true);
+    // No plugins configured -> outcomes array is empty.
+    assert.deepEqual(output.checks.outcomes, []);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: secret-manifest plugin flags missing supabase secrets', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    writeSecretManifest(repoRoot, { required: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY'], optional: [] });
+    writeProjectWorkflowChecks(repoRoot, {
+      requireSecretManifest: true,
+      secretManifestPath: 'supabase/functions/secrets.manifest.json',
+    });
+
+    // Stub: staging has only OPENAI_API_KEY; production has both.
+    const stub = JSON.stringify({
+      'staging-ref': ['OPENAI_API_KEY'],
+      'production-ref': ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
+    });
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {
+      PIPELANE_CHECKS_SUPABASE_SECRETS_STUB: stub,
+    }, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    assert.equal(output.ready, false);
+    const manifest = output.checks.outcomes.find((o) => o.plugin === 'secret-manifest');
+    assert.ok(manifest, 'secret-manifest outcome emitted');
+    assert.equal(manifest.ok, false);
+    assert.equal(manifest.findings.length, 1);
+    assert.match(manifest.findings[0].reason, /staging.*missing required secret ANTHROPIC_API_KEY/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: secret-manifest plugin passes when all required secrets are present', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    writeSecretManifest(repoRoot, { required: ['OPENAI_API_KEY'], optional: [] });
+    writeProjectWorkflowChecks(repoRoot, {
+      requireSecretManifest: true,
+      secretManifestPath: 'supabase/functions/secrets.manifest.json',
+    });
+
+    const stub = JSON.stringify({
+      'staging-ref': ['OPENAI_API_KEY'],
+      'production-ref': ['OPENAI_API_KEY'],
+    });
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {
+      PIPELANE_CHECKS_SUPABASE_SECRETS_STUB: stub,
+    });
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 0);
+    assert.equal(output.ready, true);
+    const manifest = output.checks.outcomes.find((o) => o.plugin === 'secret-manifest');
+    assert.ok(manifest);
+    assert.equal(manifest.ok, true);
+    assert.deepEqual(manifest.findings, []);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: secret-manifest plugin fails closed when manifest file is missing', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    writeProjectWorkflowChecks(repoRoot, {
+      requireSecretManifest: true,
+      secretManifestPath: 'supabase/functions/secrets.manifest.json',
+    });
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    const manifest = output.checks.outcomes.find((o) => o.plugin === 'secret-manifest');
+    assert.ok(manifest);
+    assert.equal(manifest.ok, false);
+    assert.match(manifest.findings[0].reason, /secret manifest not found/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: gh-required-secrets flags missing repo + environment secrets', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    writeProjectWorkflowChecks(repoRoot, {
+      requiredRepoSecrets: ['SUPABASE_ACCESS_TOKEN', 'CLOUDFLARE_API_TOKEN'],
+      requiredEnvironmentSecrets: ['SUPABASE_PROJECT_REF', 'APP_URL'],
+    });
+
+    // Repo has one of the two required; staging has both env secrets;
+    // production has only one.
+    const stub = JSON.stringify({
+      '': ['SUPABASE_ACCESS_TOKEN'],
+      'staging': ['SUPABASE_PROJECT_REF', 'APP_URL'],
+      'production': ['SUPABASE_PROJECT_REF'],
+    });
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {
+      PIPELANE_CHECKS_GH_SECRETS_STUB: stub,
+    }, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    const gh = output.checks.outcomes.find((o) => o.plugin === 'gh-required-secrets');
+    assert.ok(gh);
+    assert.equal(gh.ok, false);
+    const reasons = gh.findings.map((f) => f.reason).join('\n');
+    assert.match(reasons, /repo secret CLOUDFLARE_API_TOKEN missing/);
+    assert.match(reasons, /production environment secret APP_URL missing/);
+    assert.doesNotMatch(reasons, /SUPABASE_ACCESS_TOKEN missing/);
+    assert.doesNotMatch(reasons, /staging.*missing/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: gh-required-secrets passes when every required secret is present', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    writeProjectWorkflowChecks(repoRoot, {
+      requiredRepoSecrets: ['X_TOKEN'],
+      requiredEnvironmentSecrets: ['Y_SECRET'],
+    });
+    const stub = JSON.stringify({ '': ['X_TOKEN'], 'staging': ['Y_SECRET'], 'production': ['Y_SECRET'] });
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {
+      PIPELANE_CHECKS_GH_SECRETS_STUB: stub,
+    });
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 0);
+    assert.equal(output.ready, true);
+    const gh = output.checks.outcomes.find((o) => o.plugin === 'gh-required-secrets');
+    assert.ok(gh);
+    assert.equal(gh.ok, true);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: stub env vars are ignored outside NODE_ENV=test', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    writeProjectWorkflowChecks(repoRoot, {
+      requiredRepoSecrets: ['PROD_TOKEN'],
+    });
+
+    // Caller pretends the stub clears the check; with NODE_ENV != test
+    // the stub is ignored and the real `gh secret list` gets called.
+    // Without a fake gh on PATH, the real call will fail → findings
+    // report "inspection failed" rather than "missing secret". Either
+    // way, the gate does NOT clear. We assert ready:false and that the
+    // stub-report hint is NOT what satisfied it.
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {
+      NODE_ENV: 'production',
+      PIPELANE_CHECKS_GH_SECRETS_STUB: JSON.stringify({ '': ['PROD_TOKEN'] }),
+    }, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    assert.equal(output.ready, false);
+    const gh = output.checks.outcomes.find((o) => o.plugin === 'gh-required-secrets');
+    assert.ok(gh);
+    assert.equal(gh.ok, false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: secret-manifest rejects secretManifestPath that resolves outside the repo', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    writeProjectWorkflowChecks(repoRoot, {
+      requireSecretManifest: true,
+      secretManifestPath: '../../../etc/passwd',
+    });
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    const manifest = output.checks.outcomes.find((o) => o.plugin === 'secret-manifest');
+    assert.ok(manifest);
+    assert.equal(manifest.ok, false);
+    assert.match(manifest.findings[0].reason, /resolves outside the repo/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: secret-manifest rejects a manifest that is not an object with a required array', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    // Plain object with no "required" field. Previously coerced to [] and
+    // silently passed; v4 fail-closes with a clear diagnostic.
+    writeSecretManifest(repoRoot, { other: ['OPENAI_API_KEY'] });
+    writeProjectWorkflowChecks(repoRoot, {
+      requireSecretManifest: true,
+      secretManifestPath: 'supabase/functions/secrets.manifest.json',
+    });
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    const manifest = output.checks.outcomes.find((o) => o.plugin === 'secret-manifest');
+    assert.ok(manifest);
+    assert.equal(manifest.ok, false);
+    assert.match(manifest.findings[0].reason, /missing required "required" field/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: secret-manifest rejects a symlink pointing outside the repo', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+
+    // Place a valid manifest outside the repo, then symlink the expected
+    // manifest path to it. Realpath containment must reject this.
+    const externalDir = mkdtempSync(path.join(os.tmpdir(), 'ext-manifest-'));
+    writeFileSync(path.join(externalDir, 'manifest.json'), JSON.stringify({ required: ['X'] }), 'utf8');
+    const manifestDir = path.join(repoRoot, 'supabase', 'functions');
+    mkdirSync(manifestDir, { recursive: true });
+    execFileSync('ln', ['-s', path.join(externalDir, 'manifest.json'), path.join(manifestDir, 'secrets.manifest.json')]);
+
+    writeProjectWorkflowChecks(repoRoot, {
+      requireSecretManifest: true,
+      secretManifestPath: 'supabase/functions/secrets.manifest.json',
+    });
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    const manifest = output.checks.outcomes.find((o) => o.plugin === 'secret-manifest');
+    assert.ok(manifest);
+    assert.equal(manifest.ok, false);
+    assert.match(manifest.findings[0].reason, /symlinks outside the repo/);
+    rmSync(externalDir, { recursive: true, force: true });
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: runner ignores plugin self-reported ok:true when findings or error are present', async () => {
+  const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'checks', 'runner.ts'));
+  // A buggy plugin that claims ok:true but surfaces findings must NOT clear
+  // the gate. The runner derives effective ok from observable state.
+  const buggyPlugin = {
+    name: 'buggy',
+    async run() {
+      return { plugin: 'buggy', ok: true, findings: [{ plugin: 'buggy', reason: 'lying' }] };
+    },
+  };
+  const report = await mod.runChecks(
+    { repoRoot: '/', config: { checks: {} }, deployConfig: {} },
+    [buggyPlugin],
+  );
+  assert.equal(report.ok, false, 'runner rejects self-reported ok:true alongside findings');
+  // The outcome itself still carries ok:true (preserve plugin's self-report
+  // in the envelope); only the aggregate `ok` is derived.
+  assert.equal(report.outcomes[0].ok, true);
+});
+
+test('checks: secret-manifest rejects a manifest with non-array required field', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    writeSecretManifest(repoRoot, { required: 'OPENAI_API_KEY', optional: [] });
+    writeProjectWorkflowChecks(repoRoot, {
+      requireSecretManifest: true,
+      secretManifestPath: 'supabase/functions/secrets.manifest.json',
+    });
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    const manifest = output.checks.outcomes.find((o) => o.plugin === 'secret-manifest');
+    assert.ok(manifest);
+    assert.equal(manifest.ok, false);
+    assert.match(manifest.findings[0].reason, /"required" must be an array/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checks: runner catches plugin throws and reports them as fail-closed outcomes', async () => {
+  const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'checks', 'runner.ts'));
+  const throwingPlugin = {
+    name: 'boom',
+    async run() {
+      throw new Error('synthetic plugin crash');
+    },
+  };
+  const cleanPlugin = {
+    name: 'clean',
+    async run() {
+      return { plugin: 'clean', ok: true, findings: [] };
+    },
+  };
+  const report = await mod.runChecks(
+    { repoRoot: '/', config: { checks: {} }, deployConfig: {} },
+    [throwingPlugin, cleanPlugin],
+  );
+  assert.equal(report.ok, false, 'overall fails when any plugin throws');
+  assert.equal(report.outcomes.length, 2, 'both plugins ran; thrower did not abort the loop');
+  const boom = report.outcomes.find((o) => o.plugin === 'boom');
+  assert.ok(boom);
+  assert.equal(boom.ok, false);
+  assert.match(boom.findings[0].reason, /plugin threw: synthetic plugin crash/);
+  const clean = report.outcomes.find((o) => o.plugin === 'clean');
+  assert.ok(clean);
+  assert.equal(clean.ok, true);
+});
+
+test('checks: failing plugin flips overall ready to false even when observed-deploys gate passes', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    // Baseline: observed-deploys gate is green.
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql']);
+    const baseline = JSON.parse(runCli(['run', 'release-check', '--json'], repoRoot).stdout);
+    assert.equal(baseline.ready, true, 'baseline observed-deploys gate passes');
+
+    // Now turn on a plugin whose requirements cannot be met.
+    writeProjectWorkflowChecks(repoRoot, {
+      requiredRepoSecrets: ['A_NEVER_EXISTS_SECRET'],
+    });
+    const stub = JSON.stringify({ '': [] });
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {
+      PIPELANE_CHECKS_GH_SECRETS_STUB: stub,
+    }, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    assert.equal(output.ready, false);
+    // But blockedSurfaces is still empty (observed gate is fine); the
+    // blocker is the plugin, not a surface.
+    assert.deepEqual(output.blockedSurfaces, []);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('pr, merge, deploy, and task-lock work with a fake gh adapter', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
