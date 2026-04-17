@@ -781,13 +781,128 @@ test('pr, merge, deploy, and task-lock work with a fake gh adapter', () => {
     const merged = JSON.parse(runCli(['run', 'merge', '--json'], created.worktreePath, env).stdout);
     assert.equal(merged.mergedSha, 'deadbeefcafebabe');
 
-    const deployed = JSON.parse(runCli(['run', 'deploy', 'prod', '--json'], created.worktreePath, env).stdout);
+    const deployed = JSON.parse(runCli(['run', 'deploy', 'prod', '--async', '--json'], created.worktreePath, env).stdout);
     assert.equal(deployed.environment, 'prod');
     assert.equal(deployed.sha, 'deadbeefcafebabe');
+    assert.equal(deployed.status, 'requested');
+    assert.equal(deployed.taskSlug, 'api-work');
+    assert.ok(deployed.idempotencyKey, 'record carries an idempotencyKey');
 
     const ghState = JSON.parse(readFileSync(ghStateFile, 'utf8'));
     assert.equal(ghState.workflows.length, 1);
     assert.equal(ghState.workflows[0].name, 'Deploy Hosted');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('deploy verifies via gh run watch + healthcheck stubs and records status=succeeded', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '200',
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Verify Path', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Verify Path', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+
+    const deployed = JSON.parse(runCli(['run', 'deploy', 'staging', '--json'], created.worktreePath, env).stdout);
+    assert.equal(deployed.status, 'succeeded');
+    assert.equal(deployed.environment, 'staging');
+    assert.equal(deployed.verification.statusCode, 200);
+    assert.equal(deployed.verification.probes, 2);
+    assert.ok(deployed.verifiedAt);
+    assert.ok(deployed.durationMs >= 0);
+
+    // Re-running the same deploy should short-circuit via idempotency.
+    const redeployed = JSON.parse(runCli(['run', 'deploy', 'staging', '--json'], created.worktreePath, env).stdout);
+    assert.equal(redeployed.status, 'succeeded');
+    assert.equal(redeployed.idempotencyKey, deployed.idempotencyKey);
+
+    // Only ONE gh workflow run dispatch should be recorded (idempotent).
+    const ghState = JSON.parse(readFileSync(ghStateFile, 'utf8'));
+    assert.equal(ghState.workflows.length, 1);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('deploy fails closed when healthcheck returns non-2xx', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '503',
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Bad Healthcheck', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Bad Healthcheck', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+
+    const failed = runCli(['run', 'deploy', 'staging', '--json'], created.worktreePath, env, true);
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, /healthcheck returned HTTP 503/);
+
+    const stateFile = path.join(repoRoot, '.git', 'workflow-kit-state', 'deploy-state.json');
+    const deployState = JSON.parse(readFileSync(stateFile, 'utf8'));
+    const latest = deployState.records.at(-1);
+    assert.equal(latest.status, 'failed');
+    assert.equal(latest.verification.statusCode, 503);
+    assert.equal(latest.taskSlug, 'bad-healthcheck');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('deploy prod blocks when release-mode staging lacks a succeeded record', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    // Switch to release mode with override (we're testing the prod gate,
+    // not the release-readiness gate).
+    runCli(['run', 'devmode', 'release', '--override', '--reason', 'prod-gate-test', '--json'], repoRoot);
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Prod Gate', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Prod Gate', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+
+    const blocked = runCli(['run', 'deploy', 'prod', '--async', '--json'], created.worktreePath, env, true);
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /deploy prod blocked: no succeeded staging deploy/);
+    assert.match(blocked.stderr, /deadbee/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });

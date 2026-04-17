@@ -78,12 +78,35 @@ export interface PrRecord {
   updatedAt: string;
 }
 
+export type DeployStatus = 'requested' | 'succeeded' | 'failed' | 'unknown';
+
+export interface DeployVerification {
+  healthcheckUrl?: string;
+  statusCode?: number;
+  latencyMs?: number;
+  probes?: number;
+  error?: string;
+}
+
 export interface DeployRecord {
   environment: 'staging' | 'prod';
   sha: string;
   surfaces: string[];
   workflowName: string;
   requestedAt: string;
+  // v0.1: per-task, verified-outcome aware, idempotent.
+  taskSlug?: string;
+  status?: DeployStatus;
+  workflowRunId?: string;
+  workflowRunUrl?: string;
+  finishedAt?: string;
+  durationMs?: number;
+  verifiedAt?: string;
+  verification?: DeployVerification;
+  rollbackOfSha?: string;
+  idempotencyKey?: string;
+  triggeredBy?: string;
+  failureReason?: string;
 }
 
 export interface OperatorFlags {
@@ -101,6 +124,7 @@ export interface OperatorFlags {
   execute: boolean;
   confirmToken: string;
   forceInclude: string[];
+  async: boolean;
 }
 
 export interface ParsedOperatorArgs {
@@ -488,6 +512,7 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
     execute: false,
     confirmToken: '',
     forceInclude: [],
+    async: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -564,6 +589,11 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
       const raw = argv[index + 1] ?? '';
       flags.forceInclude.push(...raw.split(',').map((item) => item.trim()).filter(Boolean));
       index += 1;
+      continue;
+    }
+
+    if (token === '--async') {
+      flags.async = true;
       continue;
     }
 

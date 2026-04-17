@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+
+import type { DeployConfig } from '../release-gate.ts';
 import type { WorkflowContext } from '../state.ts';
 import {
   DEFAULT_MODE,
@@ -141,6 +144,42 @@ function escapeForDenyRegex(pattern: string): string {
 
 export function hasStagedChanges(repoRoot: string): boolean {
   return Boolean(runGit(repoRoot, ['diff', '--cached', '--name-only'], true)?.trim());
+}
+
+export function makeIdempotencyKey(options: {
+  environment: 'staging' | 'prod';
+  sha: string;
+  surfaces: string[];
+  taskSlug: string;
+}): string {
+  const canonical = JSON.stringify({
+    environment: options.environment,
+    sha: options.sha,
+    surfaces: [...options.surfaces].sort(),
+    taskSlug: options.taskSlug,
+  });
+  return createHash('sha256').update(canonical).digest('hex').slice(0, 24);
+}
+
+export function resolveHealthcheckUrl(
+  deployConfig: DeployConfig,
+  environment: 'staging' | 'prod',
+): string {
+  // Frontend is the primary surface for post-deploy probes today. edge/sql
+  // healthchecks (when they ship) layer on top of this and get their own
+  // probe entries in the verification record.
+  if (environment === 'staging') {
+    return (
+      deployConfig.frontend.staging.healthcheckUrl
+      || deployConfig.frontend.staging.url
+      || ''
+    );
+  }
+  return (
+    deployConfig.frontend.production.healthcheckUrl
+    || deployConfig.frontend.production.url
+    || ''
+  );
 }
 
 export function buildPrBody(title: string, checks: string[]): string {
