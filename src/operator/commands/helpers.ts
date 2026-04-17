@@ -86,6 +86,59 @@ export function latestCommitSubject(repoRoot: string): string {
   return runGit(repoRoot, ['log', '-1', '--pretty=%s']) ?? 'Update workflow task';
 }
 
+export function collectChangedPaths(repoRoot: string): string[] {
+  // -z disables C-quoting and uses NUL separators, so tabs, newlines,
+  // non-ASCII, and literal ` -> ` in filenames round-trip cleanly.
+  const raw = runGit(repoRoot, ['status', '--porcelain', '-z'], true) ?? '';
+  const entries = raw.split('\0').filter((entry) => entry.length > 0);
+  const paths: string[] = [];
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    // Each record is `XY<space>path`. For renames/copies (-z emits the NEW
+    // name first, then the OLD name as a separate NUL-delimited entry),
+    // we record the new name and skip the old one.
+    const xy = entry.slice(0, 2);
+    const payload = entry.length > 3 ? entry.slice(3) : '';
+    if (!payload) continue;
+    paths.push(payload);
+    if (xy[0] === 'R' || xy[0] === 'C') {
+      i += 1; // consume the "from" entry that follows
+    }
+  }
+
+  return paths;
+}
+
+export function findDenyListHits(
+  paths: string[],
+  patterns: string[],
+  forceInclude: string[],
+): Array<{ path: string; pattern: string }> {
+  const forced = new Set(forceInclude.map((entry) => entry.trim()).filter(Boolean));
+  const hits: Array<{ path: string; pattern: string }> = [];
+  for (const entry of paths) {
+    if (forced.has(entry)) continue;
+    const basename = entry.includes('/') ? entry.slice(entry.lastIndexOf('/') + 1) : entry;
+    for (const pattern of patterns) {
+      if (matchesDenyPattern(pattern, basename) || matchesDenyPattern(pattern, entry)) {
+        hits.push({ path: entry, pattern });
+        break;
+      }
+    }
+  }
+  return hits;
+}
+
+function matchesDenyPattern(pattern: string, candidate: string): boolean {
+  const regex = new RegExp(`^${escapeForDenyRegex(pattern)}$`);
+  return regex.test(candidate);
+}
+
+function escapeForDenyRegex(pattern: string): string {
+  return pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+}
+
 export function hasStagedChanges(repoRoot: string): boolean {
   return Boolean(runGit(repoRoot, ['diff', '--cached', '--name-only'], true)?.trim());
 }
@@ -136,6 +189,7 @@ export function loadPrDetails(repoRoot: string, prNumber: number): {
   number: number;
   title: string;
   url: string;
+  state?: string | null;
   mergeCommit?: { oid: string } | null;
   mergedAt?: string | null;
 } {
@@ -144,9 +198,64 @@ export function loadPrDetails(repoRoot: string, prNumber: number): {
     'view',
     String(prNumber),
     '--json',
-    'number,title,url,mergeCommit,mergedAt',
+    'number,title,url,state,mergeCommit,mergedAt',
   ]);
   return parseJsonOrThrow(output, `Could not parse PR details for #${prNumber}.`);
+}
+
+export interface PollForMergedShaOptions {
+  timeoutMs?: number;
+  intervalMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export async function pollForMergedSha(
+  repoRoot: string,
+  prNumber: number,
+  options: PollForMergedShaOptions = {},
+): Promise<{ sha: string; mergedAt: string | null; title: string; url: string; number: number }> {
+  const timeoutMs = options.timeoutMs ?? envNumber('PIPELANE_MERGE_POLL_TIMEOUT_MS', 30_000);
+  const intervalMs = options.intervalMs ?? envNumber('PIPELANE_MERGE_POLL_INTERVAL_MS', 1_000);
+  const sleep = options.sleep ?? defaultSleep;
+  const deadline = Date.now() + timeoutMs;
+  let lastState: string | null = null;
+  let lastDetails: ReturnType<typeof loadPrDetails> | null = null;
+
+  while (Date.now() <= deadline) {
+    const details = loadPrDetails(repoRoot, prNumber);
+    lastDetails = details;
+    lastState = details.state ?? null;
+    const sha = details.mergeCommit?.oid?.trim();
+    if (sha && details.state === 'MERGED') {
+      return {
+        sha,
+        mergedAt: details.mergedAt ?? null,
+        title: details.title,
+        url: details.url,
+        number: details.number,
+      };
+    }
+    if (Date.now() + intervalMs > deadline) break;
+    await sleep(intervalMs);
+  }
+
+  const suffix = lastDetails
+    ? ` Last state: ${lastState ?? 'unknown'}, mergeCommit.oid: ${lastDetails.mergeCommit?.oid ?? 'none'}.`
+    : '';
+  throw new Error(
+    `Timed out waiting for GitHub to report PR #${prNumber} as MERGED with a merge commit within ${timeoutMs}ms.${suffix}`,
+  );
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function envNumber(key: string, fallback: number): number {
+  const raw = process.env[key];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 export function watchPrChecks(repoRoot: string, prNumber: number): void {
