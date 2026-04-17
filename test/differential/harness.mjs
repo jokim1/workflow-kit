@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,35 +7,22 @@ import { fileURLToPath } from 'node:url';
 const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const PIPELANE_CLI = path.join(KIT_ROOT, 'src', 'cli.ts');
 
+// Pull canonical constants from the compiled source of truth so harness
+// semantics never drift from the real envelope/actions modules. Rebuild
+// (npm run build) is enforced via pretest:differential.
+const DIST_DIR = path.join(KIT_ROOT, 'dist', 'operator', 'api');
+if (!existsSync(path.join(DIST_DIR, 'actions.js'))) {
+  throw new Error('test:differential requires dist/ — run `npm run build` first.');
+}
+const envelopeModule = await import(path.join(DIST_DIR, 'envelope.js'));
+const actionsModule = await import(path.join(DIST_DIR, 'actions.js'));
+
 export const ROCKETBOARD_OPERATOR = process.env.ROCKETBOARD_OPERATOR
   ?? '/Users/josephkim/dev/rocketboard/scripts/workflow-operator.mjs';
 
-export const CANONICAL_LANE_STATES = new Set([
-  'healthy',
-  'running',
-  'blocked',
-  'degraded',
-  'stale',
-  'unknown',
-  'bypassed',
-  'awaiting_preflight',
-]);
-
-export const STABLE_ACTION_IDS = [
-  'new',
-  'resume',
-  'devmode.build',
-  'devmode.release',
-  'taskLock.verify',
-  'pr',
-  'merge',
-  'deploy.staging',
-  'deploy.prod',
-  'clean.plan',
-  'clean.apply',
-];
-
-export const RISKY_ACTION_IDS = new Set(['merge', 'deploy.prod', 'clean.apply']);
+export const CANONICAL_LANE_STATES = new Set(envelopeModule.CANONICAL_LANE_STATES);
+export const STABLE_ACTION_IDS = [...actionsModule.STABLE_ACTION_IDS];
+export const RISKY_ACTION_IDS = new Set(actionsModule.API_RISKY_ACTION_IDS);
 
 export function setupMinimalFixture() {
   const repoRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-diff-'));

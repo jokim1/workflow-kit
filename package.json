@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "test": "node --test test/workflow-kit.test.mjs",
+    "pretest:differential": "npm run build",
     "test:differential": "node --test test/differential/*.test.mjs",
     "smoke": "node ./src/cli.ts --help",
     "dashboard": "node ./src/cli.ts dashboard",
