@@ -323,10 +323,26 @@ function buildDeployCell(options: {
     });
   }
 
+  const latest = matching[0];
+  const cellState: LaneState = latest.status === 'succeeded'
+    ? 'healthy'
+    : latest.status === 'failed'
+      ? 'blocked'
+      : latest.status === 'requested'
+        ? 'running'
+        : 'unknown';
+  const reason = latest.status === 'succeeded'
+    ? `${environment} deploy verified for merged SHA ${shortSha(mergedSha)}`
+    : latest.status === 'failed'
+      ? `${environment} deploy failed: ${latest.failureReason ?? 'see deploy-state'}`
+      : latest.status === 'requested'
+        ? `${environment} deploy in flight for merged SHA ${shortSha(mergedSha)}`
+        : `${environment} deploy recorded (legacy) for merged SHA ${shortSha(mergedSha)}`;
+
   return buildApiStatusCell({
-    state: 'healthy',
-    reason: `${environment} deploy requested for merged SHA ${shortSha(mergedSha)}`,
-    detail: matching[0].requestedAt,
+    state: cellState,
+    reason,
+    detail: latest.requestedAt,
     checkedAt,
   });
 }

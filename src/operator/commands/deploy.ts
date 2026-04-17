@@ -45,16 +45,6 @@ function findMatchingSucceededDeploy(options: {
   ) ?? null;
 }
 
-function findMatchingInFlight(options: {
-  records: DeployRecord[];
-  idempotencyKey: string;
-}): DeployRecord | null {
-  return [...options.records].reverse().find((record) =>
-    record.idempotencyKey === options.idempotencyKey
-    && (record.status === 'requested' || record.status === 'succeeded')
-  ) ?? null;
-}
-
 export async function handleDeploy(cwd: string, parsed: ParsedOperatorArgs): Promise<void> {
   const context = resolveWorkflowContext(cwd);
   const environment = normalizeDeployEnvironment(parsed.positional[0] ?? '');
