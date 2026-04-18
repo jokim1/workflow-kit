@@ -488,23 +488,26 @@ task.
 
 ### v0.8 — Pipelane Board: merge into Pipelane ✅ SHIPPED
 
-**Shipped primarily as pipelane #5 (`db5c2d7`), with the
-launcher follow-up in pipelane #6 (`b348a79`).** Landed the
-dashboard implementation into the same branch as workflow-kit core:
-`src/dashboard/server.ts`, `src/dashboard/public/index.html`,
-`src/dashboard/README.md`, `src/dashboard/launcher.ts`, and
-`docs/PIPELANE_BOARD.md`. Tests cover the dashboard launcher +
-settings round-trip in `test/workflow-kit.test.mjs`.
-`npm run dashboard` boots against any repo exposing `workflow:api`.
+**Shipped across three landings.** Commit `2e588c4` merged the
+reference dashboard into main (`src/dashboard/server.ts`,
+`src/dashboard/public/index.html`, `src/dashboard/README.md`, plus
+the reference-design doc that pipelane #5 later renamed to
+`docs/PIPELANE_BOARD.md`). Pipelane #5 (`db5c2d7`) re-skinned it
+for the Pipelane brand (see v0.9 below). Pipelane #6 (`b348a79`) then added
+`src/dashboard/launcher.ts` and the `/pipelane` slash command that
+boots the board. Tests cover the dashboard launcher + settings
+round-trip in `test/workflow-kit.test.mjs`. `npm run dashboard`
+boots against any repo exposing `workflow:api`.
 
 ---
 
 ### v0.9 — String-level Pipelane Board rename pass ✅ SHIPPED
 
-**Shipped as pipelane #5 (`db5c2d7`), bundled with v0.8 dashboard
-landing.** Every legacy literal in code, templates, tests, and
-user-facing docs now reads "Pipelane Board"; the reference-design doc
-lives at `docs/PIPELANE_BOARD.md`. Default `boardTitle` is
+**Shipped as pipelane #5 (`db5c2d7`) — the brand re-skin of the
+reference dashboard that commit `2e588c4` had already merged to
+main.** Every legacy literal in code, templates, tests, and
+user-facing docs now reads "Pipelane Board"; the reference-design
+doc lives at `docs/PIPELANE_BOARD.md`. Default `boardTitle` is
 `${repoName} Pipelane`; user overrides stored in
 `~/.workflow-kit/dashboard/<slug>-<hash>.json` are preserved by the
 `boardTitle`/`boardSubtitle` fallback logic in
@@ -514,18 +517,17 @@ lives at `docs/PIPELANE_BOARD.md`. Default `boardTitle` is
 
 ### v0 summary
 
-v0 is ~90% shipped across pipelane #5 (v0.8 + v0.9), #13 + #14
-(v0.0 snapshot + action), #16 (v0.3 + v0.4), #17 (v0.1 + v0.2), and
-#19 (v0.5 + v0.7). v0.6 `/status` cockpit is the last catalog item
-still open.
+v0 is ~90% shipped across commit `2e588c4` + pipelane #5 + pipelane
+#6 (v0.8 + v0.9), #13 + #14 (v0.0 snapshot + action), #16 (v0.3 +
+v0.4), #17 (v0.1 + v0.2), and #19 (v0.5 + v0.7). v0.6 `/status`
+cockpit is the last catalog item still open.
 
-Post v0:
+Current state:
 
 - Workflow-kit has its own `workflow:api` — wire-compatible with
   Rocketboard, consumable by the dashboard and every future client.
-- The cockpit objective is delivered today via the web Pipelane Board;
-  the matching CLI `/status` surface (v0.6) remains queued so both
-  consumers read the same envelope.
+- The web Pipelane Board renders the cockpit today; CLI `/status`
+  (v0.6) is queued so both surfaces read the same envelope.
 - Every mutating command is exposed through preflight/execute with
   confirm-token binding.
 - Every deploy is verified end-to-end.
@@ -878,7 +880,7 @@ After each phase, update:
 
 | Phase | Focus | Days | Outcome |
 |-------|-------|------|---------|
-| v0 | Contract + correctness + visibility | ~10–11 | `workflow:api` ported from Rocketboard, CLI `/status` + web Pipelane Board both reading the same envelope, preflight/execute for every mutating action, verified deploys, silent-SHA bugs closed, Pipelane brand across all user-visible strings |
+| v0 | Contract + correctness + visibility | ~10–11 | `workflow:api` ported from Rocketboard, web Pipelane Board reading the envelope today (matching CLI `/status` queued as v0.6), preflight/execute for every mutating action, verified deploys, silent-SHA bugs closed, Pipelane brand across all user-visible strings |
 | v1 | Trust + recovery | ~6 | `rollback.*`, `doctor.*`, live probe, richer `/status`, action-wired for dashboard |
 | v2 | Positioning + package rename | ~3 | Package renamed to `pipelane`, pipelane.dev live, Codex dual-install removed |
 
@@ -890,10 +892,11 @@ earns trust. Everything else is additive.
 ## Historical sequencing
 
 The original plan called for v0.9 → v0.0 → v0.8 → v0.1–v0.7 → v1 →
-v2. Execution diverged: v0.8 + v0.9 shipped first via pipelane #5
-(the dashboard rendered Rocketboard's `workflow:api` before
-workflow-kit produced its own in pipelane #13/#14), and v0.3/v0.4
-(#16) + v0.1/v0.2 (#17) + v0.5/v0.7 (#19) + v1.2 kill-ready (#20)
-each bundled siblings. The canonical shipped order is in the
+v2. Execution diverged: v0.8 + v0.9 shipped first via commit `2e588c4`
+(dashboard surfaces) + pipelane #5 (rename) + pipelane #6
+(launcher) — the dashboard rendered Rocketboard's `workflow:api`
+before workflow-kit produced its own in pipelane #13/#14. And
+v0.3/v0.4 (#16) + v0.1/v0.2 (#17) + v0.5/v0.7 (#19) + the
+ready:true kill (#20) each bundled siblings. The canonical shipped order is in the
 "Shipped to date" table above; the one remaining v0 item is v0.6
 `/status`.
