@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFile
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { WorkflowConfig } from './state.ts';
+import type { SyncDocsConfig, WorkflowConfig } from './state.ts';
 import {
   aliasCommandName,
   CONFIG_FILENAME,
@@ -322,8 +322,41 @@ export function ensurePackageScripts(repoRoot: string): void {
   writeFileSync(targetPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
 }
 
+// Generated slash-command templates and Codex wrappers all invoke
+// `npm run workflow:<cmd>`. If a consumer opts out of packageScripts but
+// keeps claudeCommands, the commands would reference npm scripts that
+// don't exist — slash commands fail silently post-setup. Catch the
+// inconsistency here with a clear error + escape hatches instead of
+// letting the user debug "why does /clean do nothing" at runtime.
+function assertPackageScriptConsistency(repoRoot: string, syncDocs: Required<SyncDocsConfig>): void {
+  if (syncDocs.packageScripts || !syncDocs.claudeCommands) {
+    return;
+  }
+
+  const packageJsonPath = path.join(repoRoot, 'package.json');
+  const pkg = existsSync(packageJsonPath)
+    ? (JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { scripts?: Record<string, string> })
+    : {};
+  const scripts = pkg.scripts ?? {};
+  const required = WORKFLOW_COMMANDS.map((cmd) => `workflow:${cmd}`);
+  const missing = required.filter((script) => typeof scripts[script] !== 'string');
+  if (missing.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    `syncDocs.packageScripts is false but package.json is missing required npm scripts: ${missing.join(', ')}. ` +
+      `The generated .claude/commands/*.md templates and Codex wrappers invoke these via \`npm run workflow:<cmd>\`. ` +
+      `Fix it one of three ways: ` +
+      `(a) add the missing scripts to package.json yourself, ` +
+      `(b) set syncDocs.packageScripts to true (or drop the flag), or ` +
+      `(c) also set syncDocs.claudeCommands to false so the command files aren't generated.`,
+  );
+}
+
 export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void {
   const syncDocs = resolveSyncDocs(config.syncDocs);
+  assertPackageScriptConsistency(repoRoot, syncDocs);
 
   if (syncDocs.claudeCommands) {
     const commandsDir = path.join(repoRoot, '.claude', 'commands');

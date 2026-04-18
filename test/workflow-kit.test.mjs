@@ -1246,13 +1246,60 @@ test('syncDocs.claudeCommands: false skips the entire command-regen path', () =>
   }
 });
 
-test('syncDocs.packageScripts: false leaves package.json scripts untouched', () => {
+test('syncDocs.packageScripts: false preserves consumer-customized workflow scripts', () => {
   const repoRoot = createRepo();
   const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
+    // Simulate a consumer that wants its own wrappers around pipelane:
+    // they're opting out of packageScripts precisely so their customized
+    // workflow:* entries don't get overwritten on every re-sync.
+    const packageJsonPath = path.join(repoRoot, 'package.json');
+    const customScripts = {
+      build: 'my-build',
+      'workflow:new': 'my-wrapper new',
+      'workflow:resume': 'my-wrapper resume',
+      'workflow:pr': 'my-wrapper pr',
+      'workflow:merge': 'my-wrapper merge',
+      'workflow:deploy': 'my-wrapper deploy',
+      'workflow:clean': 'my-wrapper clean',
+      'workflow:devmode': 'my-wrapper devmode',
+    };
+    const consumerPackage = {
+      name: 'consumer-app',
+      private: true,
+      type: 'module',
+      scripts: customScripts,
+    };
+    writeFileSync(packageJsonPath, `${JSON.stringify(consumerPackage, null, 2)}\n`, 'utf8');
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.syncDocs = { packageScripts: false };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const after = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    assert.deepEqual(after.scripts, customScripts);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('syncDocs.packageScripts: false without required workflow:* scripts throws with guidance', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    // Consumer wipes the kit-installed workflow:* scripts but forgot to
+    // either replace them or also opt out of claudeCommands. Setup must
+    // fail loudly, not silently leave a broken slash-command config.
     const packageJsonPath = path.join(repoRoot, 'package.json');
     const consumerPackage = {
       name: 'consumer-app',
@@ -1265,6 +1312,38 @@ test('syncDocs.packageScripts: false leaves package.json scripts untouched', () 
     const configPath = path.join(repoRoot, '.project-workflow.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { packageScripts: false };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    const result = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome }, true);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /packageScripts is false but package\.json is missing required npm scripts/);
+    assert.match(result.stderr, /workflow:clean/);
+    // Error message must list the three escape hatches so the consumer
+    // can recover without digging into the codebase.
+    assert.match(result.stderr, /set syncDocs\.packageScripts to true/);
+    assert.match(result.stderr, /set syncDocs\.claudeCommands to false/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('syncDocs.packageScripts: false is allowed when claudeCommands is also false', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    // The valid "I only want README/docs marker injection" scenario.
+    // No package.json scripts, no command files — and no error.
+    const packageJsonPath = path.join(repoRoot, 'package.json');
+    const consumerPackage = { name: 'consumer-app', private: true, type: 'module', scripts: { build: 'my-build' } };
+    writeFileSync(packageJsonPath, `${JSON.stringify(consumerPackage, null, 2)}\n`, 'utf8');
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.syncDocs = { packageScripts: false, claudeCommands: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });

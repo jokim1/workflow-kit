@@ -277,7 +277,7 @@ adding a `syncDocs` block. Every flag defaults to `true`; absent or
 | `agentsSection` | Marker-wrapped `AGENTS.md` section. |
 | `docsReleaseWorkflow` | `docs/RELEASE_WORKFLOW.md` file write. |
 | `workflowClaudeTemplate` | `workflow/CLAUDE.template.md` file write. |
-| `packageScripts` | `workflow:*` + `pipelane:*` script entries in `package.json`. |
+| `packageScripts` | `workflow:*` + `pipelane:*` script entries in `package.json`. Setting this to `false` while `claudeCommands` is `true` requires the consumer's `package.json` to already define every `workflow:<cmd>` script (`new`, `resume`, `pr`, `merge`, `deploy`, `clean`, `devmode`). Setup fails fast with guidance if any are missing. |
 
 Opting out never removes content that a previous sync already wrote; it
 just stops future syncs from touching the surface.
