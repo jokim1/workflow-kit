@@ -1,3 +1,4 @@
+<!-- workflow-kit:command:pipelane -->
 Run a Pipelane subcommand for this repo.
 
 ## Subcommand routing
@@ -68,3 +69,6 @@ State lives under `~/.workflow-kit/dashboard/` (path retained across the workflo
 - `<slug>-<hash>.json` — per-repo board settings (title, subtitle, preferred port, auto-refresh)
 
 Display the command output directly. If the dashboard failed to become healthy within 8s, surface the log path so the operator can inspect what went wrong.
+
+<!-- workflow-kit:consumer-extension:start -->
+<!-- workflow-kit:consumer-extension:end -->

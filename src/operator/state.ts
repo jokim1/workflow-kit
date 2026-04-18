@@ -17,6 +17,15 @@ export const DEFAULT_WORKFLOW_ALIASES: Record<WorkflowCommand, string> = {
   clean: '/clean',
 };
 
+// Managed Claude command files that aren't workflow operator actions. These
+// still ship with `<!-- workflow-kit:command:<name> -->` markers, flow through
+// the collision / prune / consumer-extension machinery, but are not aliased
+// (filename is fixed) and are not dispatched via `pipelane run <name>`.
+export const MANAGED_EXTRA_COMMANDS = ['pipelane'] as const;
+export type ManagedExtraCommand = (typeof MANAGED_EXTRA_COMMANDS)[number];
+export const MANAGED_COMMANDS = [...WORKFLOW_COMMANDS, ...MANAGED_EXTRA_COMMANDS] as const;
+export type ManagedCommand = (typeof MANAGED_COMMANDS)[number];
+
 // v4: optional-plugin checks declared per-consumer. Absent = no checks run.
 // Each field enables a specific plugin; consumers opt in per-project. Today
 // only secret-manifest + gh-required-secrets are implemented; the shape is
@@ -650,7 +659,7 @@ export function resolveWorkflowAliases(
   aliases: Partial<Record<WorkflowCommand, string>> | Record<string, string> | undefined,
 ): Record<WorkflowCommand, string> {
   const next = {} as Record<WorkflowCommand, string>;
-  const seen = new Map<string, WorkflowCommand>();
+  const seen = new Map<string, ManagedCommand>();
 
   // Flag typos like `cleanup: '/cleanup'` when the actual command is `clean`
   // before silently dropping them. The user gets told which keys pipelane
@@ -663,6 +672,13 @@ export function resolveWorkflowAliases(
         `Unknown workflow alias key(s): ${unknown.join(', ')}. Known keys: ${WORKFLOW_COMMANDS.join(', ')}.`,
       );
     }
+  }
+
+  // Reserve MANAGED_EXTRA_COMMANDS filenames (e.g. /pipelane) so an
+  // operator alias can't collide with them and silently fight over the
+  // same `.claude/commands/<name>.md` target on every re-sync.
+  for (const extra of MANAGED_EXTRA_COMMANDS) {
+    seen.set(`/${extra}`, extra);
   }
 
   for (const command of WORKFLOW_COMMANDS) {

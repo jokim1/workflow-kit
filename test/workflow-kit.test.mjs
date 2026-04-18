@@ -972,13 +972,20 @@ test('every managed command template renders with an empty consumer-extension ma
 
     // CI invariant: if a future template edit accidentally drops the
     // empty marker pair, consumer extensions would silently vanish on
-    // the next re-sync. This test catches that at kit-time.
-    for (const cmd of ['clean', 'deploy', 'devmode', 'merge', 'new', 'pr', 'resume']) {
+    // the next re-sync. This test catches that at kit-time. pipelane is
+    // in the list even though it's an "extra" (fixed filename, not
+    // aliased) — same marker contract applies.
+    for (const cmd of ['clean', 'deploy', 'devmode', 'merge', 'new', 'pr', 'resume', 'pipelane']) {
       const contents = readFileSync(path.join(repoRoot, '.claude', 'commands', `${cmd}.md`), 'utf8');
       assert.match(
         contents,
         /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/,
         `${cmd}.md missing empty consumer-extension marker pair`,
+      );
+      assert.match(
+        contents,
+        new RegExp(`<!-- workflow-kit:command:${cmd} -->`),
+        `${cmd}.md missing command marker`,
       );
     }
   } finally {
@@ -995,7 +1002,7 @@ test('consumer-extension preservation works for every managed command', () => {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
 
-    const commands = ['clean', 'deploy', 'devmode', 'merge', 'new', 'pr', 'resume'];
+    const commands = ['clean', 'deploy', 'devmode', 'merge', 'new', 'pr', 'resume', 'pipelane'];
     for (const cmd of commands) {
       const p = path.join(repoRoot, '.claude', 'commands', `${cmd}.md`);
       const seeded = readFileSync(p, 'utf8').replace(
@@ -1019,6 +1026,94 @@ test('consumer-extension preservation works for every managed command', () => {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
   }
+});
+
+test('legacy pipelane.md (no marker) is upgraded in place on next setup', () => {
+  // Simulates a consumer that installed pipelane on main before the
+  // pipelane.md marker shipped. Their file has no marker and no
+  // consumer-extension pair; setup must detect it via legacy signatures,
+  // treat it as managed (not a collision), and overwrite with the
+  // marker-bearing template.
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const pipelanePath = path.join(repoRoot, '.claude', 'commands', 'pipelane.md');
+    writeFileSync(
+      pipelanePath,
+      [
+        'Run a Pipelane subcommand for this repo.',
+        '',
+        'Legacy body that predates the marker pair.',
+        '',
+        '```bash',
+        'npm run pipelane:board',
+        '```',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const after = readFileSync(pipelanePath, 'utf8');
+    assert.match(after, /<!-- workflow-kit:command:pipelane -->/);
+    assert.match(
+      after,
+      /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/,
+    );
+    assert.doesNotMatch(after, /Legacy body that predates the marker pair\./);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('unrelated pre-existing pipelane.md raises collision instead of silently clobbering', () => {
+  // A consumer who authored their own .claude/commands/pipelane.md
+  // without the legacy signatures shouldn't have it overwritten. This
+  // mirrors the operator-command collision contract.
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    // Nuke the init-generated pipelane.md + its managed manifest entry so
+    // the next setup treats the directory as "consumer-authored."
+    rmSync(path.join(repoRoot, '.claude', 'commands', 'pipelane.md'), { force: true });
+    rmSync(path.join(repoRoot, '.claude', 'commands', '.workflow-kit-managed.json'), { force: true });
+    writeFileSync(
+      path.join(repoRoot, '.claude', 'commands', 'pipelane.md'),
+      'Custom consumer notes. Not managed by pipelane.\n',
+      'utf8',
+    );
+
+    const result = spawnSync('node', [path.join(KIT_ROOT, 'src', 'cli.ts'), 'setup'], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.notEqual(result.status, 0, 'setup should refuse to clobber a non-managed pipelane.md');
+    assert.match(result.stderr, /pipelane\.md/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('resolveWorkflowAliases rejects aliases that collide with MANAGED_EXTRA_COMMANDS filenames', async () => {
+  // Defense in depth: if a consumer aliases an operator command to
+  // `/pipelane`, two writers would fight over the same file. Catch that
+  // at config-load time with a clear error.
+  const { resolveWorkflowAliases } = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  assert.throws(
+    () => resolveWorkflowAliases({ new: '/pipelane' }),
+    /both resolve to \/pipelane/,
+  );
 });
 
 test('consumer-extension ignores malformed marker pairs without crashing', () => {

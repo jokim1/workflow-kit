@@ -52,6 +52,8 @@ mirrors it.
 | 8.2 | Portable workflow aliases (port of #1) | ✅ merged | pipelane #24 |
 | 8.3 | Consumer-extension markers in managed Claude commands | ✅ merged | pipelane #25 |
 | 8.4 | `.project-workflow.json:syncDocs` opt-out block | ✅ merged | pipelane #26 |
+| 8.5 | `pipelane configure` subcommand (CLAUDE.md Deploy Configuration seed) | ✅ merged | pipelane #27 |
+| 8.6 | CRLF line endings fix in `parseDeployConfigMarkdown` fence regex | ✅ merged | pipelane #28 |
 
 Ship items in this exact order. Each is its own PR in Pipelane unless
 noted. Catalog IDs reference the detailed sections below.
