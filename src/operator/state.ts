@@ -17,6 +17,15 @@ export const DEFAULT_WORKFLOW_ALIASES: Record<WorkflowCommand, string> = {
   clean: '/clean',
 };
 
+// Managed Claude command files that aren't workflow operator actions. These
+// still ship with `<!-- workflow-kit:command:<name> -->` markers, flow through
+// the collision / prune / consumer-extension machinery, but are not aliased
+// (filename is fixed) and are not dispatched via `pipelane run <name>`.
+export const MANAGED_EXTRA_COMMANDS = ['pipelane'] as const;
+export type ManagedExtraCommand = (typeof MANAGED_EXTRA_COMMANDS)[number];
+export const MANAGED_COMMANDS = [...WORKFLOW_COMMANDS, ...MANAGED_EXTRA_COMMANDS] as const;
+export type ManagedCommand = (typeof MANAGED_COMMANDS)[number];
+
 // v4: optional-plugin checks declared per-consumer. Absent = no checks run.
 // Each field enables a specific plugin; consumers opt in per-project. Today
 // only secret-manifest + gh-required-secrets are implemented; the shape is

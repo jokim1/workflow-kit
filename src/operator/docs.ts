@@ -8,13 +8,15 @@ import {
   CONFIG_FILENAME,
   defaultWorkflowConfig,
   inferProjectKey,
+  MANAGED_COMMANDS,
+  MANAGED_EXTRA_COMMANDS,
+  type ManagedCommand,
   readJsonFile,
   resolveRepoRoot,
   resolveSyncDocs,
   resolveWorkflowAliases,
   runGit,
   WORKFLOW_COMMANDS,
-  type WorkflowCommand,
   writeJsonFile,
   writeWorkflowConfig,
 } from './state.ts';
@@ -36,7 +38,11 @@ const MANAGED_CLAUDE_COMMANDS_FILENAME = '.workflow-kit-managed.json';
 // survives any `-- $ARGUMENTS` / `-- --apply` / bare-invocation variant
 // current-main templates have emitted. Consumers that had these files
 // generated before this PR carry no marker, so detection falls back here.
-const LEGACY_CLAUDE_SIGNATURES: Record<WorkflowCommand, string[]> = {
+// Exported for structural validation in test/workflow-kit.test.mjs —
+// every MANAGED_COMMANDS member must have a non-empty signature array so
+// pre-marker consumer files upgrade cleanly on the next setup instead of
+// raising a collision error.
+export const LEGACY_CLAUDE_SIGNATURES: Record<ManagedCommand, string[]> = {
   clean: [
     'Report workflow cleanup status and prune stale task locks when requested.',
     'npm run workflow:clean',
@@ -64,6 +70,18 @@ const LEGACY_CLAUDE_SIGNATURES: Record<WorkflowCommand, string[]> = {
   resume: [
     'Resume an existing task workspace for this repo.',
     'npm run workflow:resume',
+  ],
+  // `pipelane` shipped without a marker on main before this PR landed, so
+  // existing consumers have a `.claude/commands/pipelane.md` we need to
+  // upgrade in place on the next setup run. Three distinctive strings
+  // (not two) make it vanishingly unlikely a consumer-authored pipelane.md
+  // hits every signature by coincidence — each adds a ~1-in-thousands
+  // specificity layer, and together they're effectively
+  // "this file was generated from the pipelane.md template."
+  pipelane: [
+    'Run a Pipelane subcommand for this repo.',
+    'npm run pipelane:board',
+    '## Pipelane Board (default)',
   ],
 };
 
@@ -121,12 +139,25 @@ export function renderClaudeMdFromTemplate(config: WorkflowConfig): string {
   return rendered.replace('{{DEPLOY_CONFIG_SECTION}}', emptySection);
 }
 
-function detectLegacyClaudeCommand(content: string): WorkflowCommand | null {
-  for (const command of WORKFLOW_COMMANDS) {
+function detectLegacyClaudeCommand(content: string, filename?: string): ManagedCommand | null {
+  for (const command of MANAGED_COMMANDS) {
     const signatures = LEGACY_CLAUDE_SIGNATURES[command];
-    if (signatures.every((signature) => content.includes(signature))) {
-      return command;
+    if (!signatures.every((signature) => content.includes(signature))) {
+      continue;
     }
+    // Extras (pipelane.md) use fixed, non-aliased filenames. Gating
+    // legacy detection to the expected filename prevents a consumer-
+    // authored .md that happens to quote both signatures (in docs, a
+    // cheatsheet, or a fenced code example) from being mis-classified
+    // as managed and pruned. Operator commands are aliased, so their
+    // filename isn't knowable at detection time — that false-positive
+    // risk is pre-existing from PR #25 and out of scope here.
+    if ((MANAGED_EXTRA_COMMANDS as readonly string[]).includes(command)) {
+      if (filename !== `${command}.md`) {
+        continue;
+      }
+    }
+    return command;
   }
 
   return null;
@@ -137,7 +168,7 @@ function isManagedClaudeCommand(filename: string, content: string): boolean {
     return true;
   }
 
-  return detectLegacyClaudeCommand(content) !== null;
+  return detectLegacyClaudeCommand(content, filename) !== null;
 }
 
 function loadManagedClaudeCommands(commandsDir: string): Set<string> {
@@ -236,32 +267,34 @@ function injectConsumerExtension(rendered: string, captured: string | null): str
   return rendered.replace(emptyMarkerPair, populated);
 }
 
-function identifyManagedCommand(content: string): WorkflowCommand | null {
-  for (const cmd of WORKFLOW_COMMANDS) {
+function identifyManagedCommand(content: string, filename?: string): ManagedCommand | null {
+  for (const cmd of MANAGED_COMMANDS) {
     if (content.includes(`${CLAUDE_COMMAND_MARKER}${cmd} -->`)) {
       return cmd;
     }
   }
 
-  return detectLegacyClaudeCommand(content);
+  return detectLegacyClaudeCommand(content, filename);
 }
 
 // Walk every managed file, key its captured extension by command (not by
 // filename). This makes preserve survive alias renames: the old file gets
 // pruned, but the captured content follows the command to its new aliased
-// target below.
+// target below. Extras (pipelane) use their fixed filename as the key but
+// flow through the same preserve path so their consumer-extension blocks
+// survive re-sync too.
 function captureManagedExtensionsByCommand(
   commandsDir: string,
   managedFiles: Set<string>,
-): Map<WorkflowCommand, string> {
-  const extensions = new Map<WorkflowCommand, string>();
+): Map<ManagedCommand, string> {
+  const extensions = new Map<ManagedCommand, string>();
   for (const filename of managedFiles) {
     const filePath = path.join(commandsDir, filename);
     if (!existsSync(filePath)) {
       continue;
     }
     const content = readFileSync(filePath, 'utf8');
-    const command = identifyManagedCommand(content);
+    const command = identifyManagedCommand(content, filename);
     if (!command) {
       continue;
     }
@@ -381,6 +414,20 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
     mkdirSync(commandsDir, { recursive: true });
 
     const aliases = resolveWorkflowAliases(config.aliases);
+    // Enforce operator/extras filename uniqueness only when claudeCommands
+    // is actually syncing. A consumer who opts out entirely can legitimately
+    // keep an `aliases.new = '/pipelane'` in their config without triggering
+    // the two-writer collision this guard prevents — the collision only
+    // materializes when both loops below would write to the same file.
+    for (const [command, alias] of Object.entries(aliases)) {
+      for (const extra of MANAGED_EXTRA_COMMANDS) {
+        if (alias === `/${extra}`) {
+          throw new Error(
+            `Workflow aliases must be unique. ${extra} and ${command} both resolve to ${alias}.`,
+          );
+        }
+      }
+    }
     const managedCommandFiles = loadManagedClaudeCommands(commandsDir);
     // Capture before prune so the extension follows the command through
     // alias renames (old filename gets pruned but its content survives).
@@ -389,6 +436,12 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
     for (const name of WORKFLOW_COMMANDS) {
       const commandFilename = `${aliasCommandName(aliases[name])}.md`;
       desiredCommandFiles.add(commandFilename);
+    }
+    // Extras (pipelane.md) use fixed filenames — not aliased — but they
+    // still participate in collision detection, prune, and extension
+    // preservation so consumer hand-edits inside the marker pair survive.
+    for (const name of MANAGED_EXTRA_COMMANDS) {
+      desiredCommandFiles.add(`${name}.md`);
     }
     assertNoClaudeCollisions(commandsDir, desiredCommandFiles, managedCommandFiles);
     pruneManagedClaudeCommands(commandsDir, desiredCommandFiles, managedCommandFiles);
@@ -399,18 +452,13 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
       const output = injectConsumerExtension(rendered, capturedExtensions.get(name) ?? null);
       writeFileSync(targetPath, output, 'utf8');
     }
+    for (const name of MANAGED_EXTRA_COMMANDS) {
+      const rendered = renderTemplate(readTemplate(`.claude/commands/${name}.md`), config);
+      const targetPath = path.join(commandsDir, `${name}.md`);
+      const output = injectConsumerExtension(rendered, capturedExtensions.get(name) ?? null);
+      writeFileSync(targetPath, output, 'utf8');
+    }
     saveManagedClaudeCommands(commandsDir, desiredCommandFiles);
-
-    // pipelane.md is a Claude command file but not a workflow command (it
-    // opens the board, not a task-flow step), so it isn't aliased and sits
-    // outside the managed set. It regenerates alongside the managed commands
-    // whenever `claudeCommands` is enabled; when the surface is opted out,
-    // pipelane.md is skipped too (which is why it lives inside this block).
-    writeFileSync(
-      path.join(commandsDir, 'pipelane.md'),
-      renderTemplate(readTemplate('.claude/commands/pipelane.md'), config),
-      'utf8',
-    );
   }
 
   if (syncDocs.workflowClaudeTemplate) {

@@ -8,16 +8,6 @@
   "branchPrefix": "codex/",
   "legacyBranchPrefixes": [],
   "surfaces": ["frontend", "edge", "sql"],
-  "aliases": {
-    "devmode": "/devmode",
-    "new": "/new",
-    "resume": "/resume",
-    "pr": "/pr",
-    "merge": "/merge",
-    "deploy": "/deploy",
-    "clean": "/clean",
-    "pipelane": "/pipelane"
-  },
   "prePrChecks": [
     "npm run test",
     "npm run typecheck",
