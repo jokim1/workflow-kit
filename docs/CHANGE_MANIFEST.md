@@ -1,6 +1,6 @@
 # Pipelane Change Manifest
 
-Last updated: April 16, 2026 (revised after `workflow:api` + dashboard discovery)
+Last updated: April 18, 2026 (v0 brand pass closed — v0.8 + v0.9 shipped in pipelane #5)
 Status: **execution plan** for reaching the target-state spec in
 `docs/RELEASE_WORKFLOW.md`
 
@@ -488,13 +488,14 @@ task.
 
 ### v0.8 — Pipelane Board: merge into Pipelane ✅ SHIPPED
 
-**Shipped as pipelane #5 (`db5c2d7`).** Landed the dashboard
-implementation into the same branch as workflow-kit core:
+**Shipped primarily as pipelane #5 (`db5c2d7`), with the
+launcher follow-up in pipelane #6 (`b348a79`).** Landed the
+dashboard implementation into the same branch as workflow-kit core:
 `src/dashboard/server.ts`, `src/dashboard/public/index.html`,
-`src/dashboard/README.md`, and `docs/PIPELANE_BOARD.md`. Tests cover
-the dashboard launcher + settings round-trip in
-`test/workflow-kit.test.mjs`. `npm run dashboard` boots against any
-repo exposing `workflow:api`.
+`src/dashboard/README.md`, `src/dashboard/launcher.ts`, and
+`docs/PIPELANE_BOARD.md`. Tests cover the dashboard launcher +
+settings round-trip in `test/workflow-kit.test.mjs`.
+`npm run dashboard` boots against any repo exposing `workflow:api`.
 
 ---
 
@@ -513,14 +514,18 @@ lives at `docs/PIPELANE_BOARD.md`. Default `boardTitle` is
 
 ### v0 summary
 
-Total v0 effort: ~10–11 days (up from ~7–8 due to v0.0, v0.8, v0.9).
+v0 is ~90% shipped across pipelane #5 (v0.8 + v0.9), #13 + #14
+(v0.0 snapshot + action), #16 (v0.3 + v0.4), #17 (v0.1 + v0.2), and
+#19 (v0.5 + v0.7). v0.6 `/status` cockpit is the last catalog item
+still open.
 
-After v0 ships:
+Post v0:
 
 - Workflow-kit has its own `workflow:api` — wire-compatible with
   Rocketboard, consumable by the dashboard and every future client.
-- The cockpit objective is delivered in two forms: CLI `/status` and
-  web Pipelane Board, both reading the same envelope.
+- The cockpit objective is delivered today via the web Pipelane Board;
+  the matching CLI `/status` surface (v0.6) remains queued so both
+  consumers read the same envelope.
 - Every mutating command is exposed through preflight/execute with
   confirm-token binding.
 - Every deploy is verified end-to-end.
@@ -882,18 +887,13 @@ on its two strongest objectives (visual pipeline + error-free release)
 across both CLI and web surfaces — with one canonical contract — and
 earns trust. Everything else is additive.
 
-## First-move checklist
+## Historical sequencing
 
-Because v0.9 (string rename to Pipelane) has no code dependencies and
-pipelane.dev is already registered, it can land before or alongside
-v0.0. Suggested order:
-
-1. **v0.9** — one afternoon, string rename, ship the Pipelane brand.
-2. **v0.0** — the load-bearing work; port `workflow:api` into workflow-kit.
-3. **v0.8** — merge the dashboard branch in once v0.0 provides an
-   envelope source.
-4. **v0.1 → v0.7** — correctness fixes, now expressed as actions in
-   the v0.0 registry.
-5. **v1 phase** — rollback, doctor, nextAction, status flags,
-   WIP + override.
-6. **v2 phase** — package rename + Codex cut.
+The original plan called for v0.9 → v0.0 → v0.8 → v0.1–v0.7 → v1 →
+v2. Execution diverged: v0.8 + v0.9 shipped first via pipelane #5
+(the dashboard rendered Rocketboard's `workflow:api` before
+workflow-kit produced its own in pipelane #13/#14), and v0.3/v0.4
+(#16) + v0.1/v0.2 (#17) + v0.5/v0.7 (#19) + v1.2 kill-ready (#20)
+each bundled siblings. The canonical shipped order is in the
+"Shipped to date" table above; the one remaining v0 item is v0.6
+`/status`.
