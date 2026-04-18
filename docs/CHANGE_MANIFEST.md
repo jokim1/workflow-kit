@@ -54,6 +54,7 @@ mirrors it.
 | 8.4 | `.project-workflow.json:syncDocs` opt-out block | ✅ merged | pipelane #26 |
 | 8.5 | `pipelane configure` subcommand (CLAUDE.md Deploy Configuration seed) | ✅ merged | pipelane #27 |
 | 8.6 | CRLF line endings fix in `parseDeployConfigMarkdown` fence regex | ✅ merged | pipelane #28 |
+| 8.7 | `pipelane.md` folded into managed-command set (+ residual #2 `.project-workflow.json:aliases` cleanup) | ✅ merged | pipelane #29 |
 
 Ship items in this exact order. Each is its own PR in Pipelane unless
 noted. Catalog IDs reference the detailed sections below.
@@ -110,7 +111,7 @@ not gating the Rocketboard swap.
 
 After v0.0 lands, **every mutating command in Pipelane is an action
 exposed over `workflow:api`**, and every read surface (`/status`, the
-Branch Pipeline Board dashboard, third-party clients) consumes the same
+Pipelane Board dashboard, third-party clients) consumes the same
 envelope grammar. The target is Rocketboard-compatible so any client
 that speaks Rocketboard's contract speaks Pipelane's.
 
@@ -420,7 +421,7 @@ the exact sha/surfaces/env triple from preflight.
 
 **Goal.** Ship the stated #1 objective: one-screen terminal cockpit
 that renders the `workflow:api snapshot` envelope. Same data as the
-Branch Pipeline Board dashboard, zero derivation drift.
+Pipelane Board dashboard, zero derivation drift.
 
 **Files touched.**
 - `src/operator/commands/status.ts` — new command. **Does not** read
@@ -431,8 +432,7 @@ Branch Pipeline Board dashboard, zero derivation drift.
      (mode, base, overallFreshness), then `data.branches[]` grouped
      into active / recent / stale, then `data.sourceHealth[]`.
   - Color-maps the canonical 8-state vocabulary to terminal colors
-    (same mapping documented in `docs/BRANCH_PIPELINE_BOARD.md` →
-    now `docs/PIPELANE_BOARD.md`).
+    (same mapping documented in `docs/PIPELANE_BOARD.md`).
   - Renders the fixed 5-lane line per branch:
     `[Local] [PR] [Base: main] [Staging] [Production]` with state
     glyphs.
@@ -486,77 +486,28 @@ task.
 
 ---
 
-### v0.8 — Branch Pipeline Board: merge into Pipelane
+### v0.8 — Pipelane Board: merge into Pipelane ✅ SHIPPED
 
-**Goal.** Bring the dashboard implementation (currently on sibling
-branches `codex/alias-dashboard-integration` /
-`codex/pipeline-dashboard-v1` / `codex/dashboard-reference-design`)
-into the same branch as the v0.0 `workflow:api` implementation so the
-two ship together.
-
-**Files touched.**
-- Merge `src/dashboard/` (server.ts + public/index.html +
-  src/dashboard/README.md) from the latest dashboard branch
-  (currently `codex/alias-dashboard-integration` — commit `2e588c4`).
-- `docs/BRANCH_PIPELINE_BOARD.md` → rename to `docs/PIPELANE_BOARD.md`
-  and rewrite references from "Branch Pipeline Board" to "Pipelane
-  Board" (the web cockpit of Pipelane).
-- `src/dashboard/server.ts` — change default titles and subtitles
-  (see v0.9 rename pass).
-- Test wiring from the dashboard branch: `test/workflow-kit.test.mjs`
-  gets the dashboard integration test block.
-- `package.json` — keep the existing `"dashboard": "node ./src/cli.ts
-  dashboard"` script.
-
-**Acceptance criteria.**
-- `npm run dashboard -- --repo .` (pointed at workflow-kit itself)
-  connects and renders because v0.0 gives workflow-kit a
-  `workflow:api` of its own.
-- `npm run dashboard -- --repo /path/to/rocketboard` still works
-  unchanged.
-- The dashboard integration test passes in CI.
-
-**Effort.** 0.5 day (merge + rename strings).
-**Depends on.** v0.0 (no sense merging the adapter until workflow-kit
-produces an envelope), v0.9 (rename pass catches the title strings).
+**Shipped as pipelane #5 (`db5c2d7`).** Landed the dashboard
+implementation into the same branch as workflow-kit core:
+`src/dashboard/server.ts`, `src/dashboard/public/index.html`,
+`src/dashboard/README.md`, and `docs/PIPELANE_BOARD.md`. Tests cover
+the dashboard launcher + settings round-trip in
+`test/workflow-kit.test.mjs`. `npm run dashboard` boots against any
+repo exposing `workflow:api`.
 
 ---
 
-### v0.9 — String-level Pipelane Board rename pass
+### v0.9 — String-level Pipelane Board rename pass ✅ SHIPPED
 
-**Goal.** Because pipelane.dev is registered and Pipelane is
-committed, rename every instance of "Branch Pipeline Board" →
-"Pipelane Board" and every default board-title string to use
-"Pipelane" directly. This is a string-only pass; no package rename
-yet (that's v2.1).
-
-**Files touched.**
-- `src/dashboard/server.ts` — `defaultDashboardSettings`:
-  - `boardTitle`: `${repoName} Pipelane` (was `${repoName} Branch
-    Pipeline Board`)
-  - `boardSubtitle`: "Release cockpit for AI vibe coders. Branch
-    pipeline triage, action preflight, execution follow-through, and
-    cleanup discipline." (concise rewrite)
-  - `DEFAULT_BOARD_SUBTITLE` constant updated.
-- `src/dashboard/public/index.html` — rewrite hero copy and every
-  literal "Branch Pipeline Board" reference. Update the landing copy
-  about "Rocketboard's workflow:api" to "your repo's workflow:api
-  contract" (it's repo-agnostic).
-- `docs/BRANCH_PIPELINE_BOARD.md` → `docs/PIPELANE_BOARD.md`. Rewrite
-  all references; redirect internal links in `README.md` and
-  `docs/RELEASE_WORKFLOW.md`.
-- `src/dashboard/README.md` — Pipelane Board references.
-- `README.md` — one-liner intro swap.
-
-**Acceptance criteria.**
-- `grep -r "Branch Pipeline Board"` returns zero matches in the repo.
-- Default dashboard title is `${repoName} Pipelane`.
-- Existing user-written `~/.workflow-kit/dashboard/<slug>-<hash>.json`
-  settings files still work (boardTitle is a user-overridable field).
-
-**Effort.** 0.5 day.
-**Depends on.** Nothing. Safe to do first if the dashboard branch
-lands before v0.0.
+**Shipped as pipelane #5 (`db5c2d7`), bundled with v0.8 dashboard
+landing.** Every legacy literal in code, templates, tests, and
+user-facing docs now reads "Pipelane Board"; the reference-design doc
+lives at `docs/PIPELANE_BOARD.md`. Default `boardTitle` is
+`${repoName} Pipelane`; user overrides stored in
+`~/.workflow-kit/dashboard/<slug>-<hash>.json` are preserved by the
+`boardTitle`/`boardSubtitle` fallback logic in
+`src/dashboard/server.ts`.
 
 ---
 
