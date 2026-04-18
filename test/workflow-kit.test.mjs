@@ -1085,6 +1085,55 @@ test('consumer-extension preserves content even when it contains a nested end-ma
   }
 });
 
+test('consumer-extension survives an alias rename after the content was added', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
+    const withExtension = readFileSync(cleanPath, 'utf8').replace(
+      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      [
+        '<!-- workflow-kit:consumer-extension:start -->',
+        'RENAME-MIGRATION-SENTINEL',
+        '<!-- workflow-kit:consumer-extension:end -->',
+      ].join('\n'),
+    );
+    writeFileSync(cleanPath, withExtension, 'utf8');
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.aliases.clean = '/cleanup';
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    assert.equal(existsSync(cleanPath), false, 'old clean.md should have been pruned');
+    const renamedPath = path.join(repoRoot, '.claude', 'commands', 'cleanup.md');
+    const migrated = readFileSync(renamedPath, 'utf8');
+    assert.match(migrated, /RENAME-MIGRATION-SENTINEL/);
+    assert.match(migrated, /<!-- workflow-kit:command:clean -->/);
+
+    // Rename a second time — content should still follow the command.
+    const updatedConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+    updatedConfig.aliases.clean = '/janitor';
+    writeFileSync(configPath, `${JSON.stringify(updatedConfig, null, 2)}\n`, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    assert.equal(existsSync(renamedPath), false, 'intermediate cleanup.md should have been pruned');
+    const finalPath = path.join(repoRoot, '.claude', 'commands', 'janitor.md');
+    const finalContent = readFileSync(finalPath, 'utf8');
+    assert.match(finalContent, /RENAME-MIGRATION-SENTINEL/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('Codex alias wrappers stay safe when different repos map the same alias differently', () => {
   const repoOne = createRepo();
   const repoTwo = createRepo();

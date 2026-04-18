@@ -209,12 +209,7 @@ function extractConsumerExtension(content: string): string | null {
   return trimmed;
 }
 
-function applyConsumerExtension(rendered: string, existingContent: string | null): string {
-  if (existingContent === null) {
-    return rendered;
-  }
-
-  const captured = extractConsumerExtension(existingContent);
+function injectConsumerExtension(rendered: string, captured: string | null): string {
   if (captured === null || captured.length === 0) {
     return rendered;
   }
@@ -226,6 +221,43 @@ function applyConsumerExtension(rendered: string, existingContent: string | null
 
   const populated = `${CONSUMER_EXTENSION_MARKER_START}\n${captured}\n${CONSUMER_EXTENSION_MARKER_END}`;
   return rendered.replace(emptyMarkerPair, populated);
+}
+
+function identifyManagedCommand(content: string): WorkflowCommand | null {
+  for (const cmd of WORKFLOW_COMMANDS) {
+    if (content.includes(`${CLAUDE_COMMAND_MARKER}${cmd} -->`)) {
+      return cmd;
+    }
+  }
+
+  return detectLegacyClaudeCommand(content);
+}
+
+// Walk every managed file, key its captured extension by command (not by
+// filename). This makes preserve survive alias renames: the old file gets
+// pruned, but the captured content follows the command to its new aliased
+// target below.
+function captureManagedExtensionsByCommand(
+  commandsDir: string,
+  managedFiles: Set<string>,
+): Map<WorkflowCommand, string> {
+  const extensions = new Map<WorkflowCommand, string>();
+  for (const filename of managedFiles) {
+    const filePath = path.join(commandsDir, filename);
+    if (!existsSync(filePath)) {
+      continue;
+    }
+    const content = readFileSync(filePath, 'utf8');
+    const command = identifyManagedCommand(content);
+    if (!command) {
+      continue;
+    }
+    const captured = extractConsumerExtension(content);
+    if (captured && captured.length > 0) {
+      extensions.set(command, captured);
+    }
+  }
+  return extensions;
 }
 
 function replaceMarkedSection(targetPath: string, startMarker: string, endMarker: string, rendered: string, defaultHeading = ''): void {
@@ -297,6 +329,9 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
 
   const aliases = resolveWorkflowAliases(config.aliases);
   const managedCommandFiles = loadManagedClaudeCommands(commandsDir);
+  // Capture before prune so the extension follows the command through
+  // alias renames (old filename gets pruned but its content survives).
+  const capturedExtensions = captureManagedExtensionsByCommand(commandsDir, managedCommandFiles);
   const desiredCommandFiles = new Set<string>();
   for (const name of WORKFLOW_COMMANDS) {
     const commandFilename = `${aliasCommandName(aliases[name])}.md`;
@@ -308,8 +343,7 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
     const rendered = renderTemplate(readTemplate(`.claude/commands/${name}.md`), config);
     const commandFilename = `${aliasCommandName(aliases[name])}.md`;
     const targetPath = path.join(commandsDir, commandFilename);
-    const existingContent = existsSync(targetPath) ? readFileSync(targetPath, 'utf8') : null;
-    const output = applyConsumerExtension(rendered, existingContent);
+    const output = injectConsumerExtension(rendered, capturedExtensions.get(name) ?? null);
     writeFileSync(targetPath, output, 'utf8');
   }
   saveManagedClaudeCommands(commandsDir, desiredCommandFiles);
