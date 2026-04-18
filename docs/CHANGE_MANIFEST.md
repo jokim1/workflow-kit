@@ -802,8 +802,9 @@ package itself. `pipelane.dev` is already registered for docs / landing.
   `workflow:*` scripts to `pipelane:*` when initializing new repos.
   Existing repos keep `workflow:*` for one deprecation window;
   templates emit both names for two versions.
-- `templates/project-workflow.json` — default aliases unchanged
-  (user-visible `/new`, `/pr`, etc.).
+- `templates/project-workflow.json` — no aliases block to touch.
+  Defaults live in `DEFAULT_WORKFLOW_ALIASES` (state.ts) and the
+  v0.9 rename will keep user-visible `/new`, `/pr`, etc. unchanged.
 - `README.md` — rename and rewrite the intro; "previously
   `workflow-kit`" callout. Link to `pipelane.dev`.
 - `docs/RELEASE_WORKFLOW.md` — already on Pipelane.

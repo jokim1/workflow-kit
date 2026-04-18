@@ -38,7 +38,11 @@ const MANAGED_CLAUDE_COMMANDS_FILENAME = '.workflow-kit-managed.json';
 // survives any `-- $ARGUMENTS` / `-- --apply` / bare-invocation variant
 // current-main templates have emitted. Consumers that had these files
 // generated before this PR carry no marker, so detection falls back here.
-const LEGACY_CLAUDE_SIGNATURES: Record<ManagedCommand, string[]> = {
+// Exported for structural validation in test/workflow-kit.test.mjs —
+// every MANAGED_COMMANDS member must have a non-empty signature array so
+// pre-marker consumer files upgrade cleanly on the next setup instead of
+// raising a collision error.
+export const LEGACY_CLAUDE_SIGNATURES: Record<ManagedCommand, string[]> = {
   clean: [
     'Report workflow cleanup status and prune stale task locks when requested.',
     'npm run workflow:clean',
@@ -69,10 +73,15 @@ const LEGACY_CLAUDE_SIGNATURES: Record<ManagedCommand, string[]> = {
   ],
   // `pipelane` shipped without a marker on main before this PR landed, so
   // existing consumers have a `.claude/commands/pipelane.md` we need to
-  // upgrade in place on the next setup run.
+  // upgrade in place on the next setup run. Three distinctive strings
+  // (not two) make it vanishingly unlikely a consumer-authored pipelane.md
+  // hits every signature by coincidence — each adds a ~1-in-thousands
+  // specificity layer, and together they're effectively
+  // "this file was generated from the pipelane.md template."
   pipelane: [
     'Run a Pipelane subcommand for this repo.',
     'npm run pipelane:board',
+    '## Pipelane Board (default)',
   ],
 };
 
@@ -130,12 +139,25 @@ export function renderClaudeMdFromTemplate(config: WorkflowConfig): string {
   return rendered.replace('{{DEPLOY_CONFIG_SECTION}}', emptySection);
 }
 
-function detectLegacyClaudeCommand(content: string): ManagedCommand | null {
+function detectLegacyClaudeCommand(content: string, filename?: string): ManagedCommand | null {
   for (const command of MANAGED_COMMANDS) {
     const signatures = LEGACY_CLAUDE_SIGNATURES[command];
-    if (signatures.every((signature) => content.includes(signature))) {
-      return command;
+    if (!signatures.every((signature) => content.includes(signature))) {
+      continue;
     }
+    // Extras (pipelane.md) use fixed, non-aliased filenames. Gating
+    // legacy detection to the expected filename prevents a consumer-
+    // authored .md that happens to quote both signatures (in docs, a
+    // cheatsheet, or a fenced code example) from being mis-classified
+    // as managed and pruned. Operator commands are aliased, so their
+    // filename isn't knowable at detection time — that false-positive
+    // risk is pre-existing from PR #25 and out of scope here.
+    if ((MANAGED_EXTRA_COMMANDS as readonly string[]).includes(command)) {
+      if (filename !== `${command}.md`) {
+        continue;
+      }
+    }
+    return command;
   }
 
   return null;
@@ -146,7 +168,7 @@ function isManagedClaudeCommand(filename: string, content: string): boolean {
     return true;
   }
 
-  return detectLegacyClaudeCommand(content) !== null;
+  return detectLegacyClaudeCommand(content, filename) !== null;
 }
 
 function loadManagedClaudeCommands(commandsDir: string): Set<string> {
@@ -245,14 +267,14 @@ function injectConsumerExtension(rendered: string, captured: string | null): str
   return rendered.replace(emptyMarkerPair, populated);
 }
 
-function identifyManagedCommand(content: string): ManagedCommand | null {
+function identifyManagedCommand(content: string, filename?: string): ManagedCommand | null {
   for (const cmd of MANAGED_COMMANDS) {
     if (content.includes(`${CLAUDE_COMMAND_MARKER}${cmd} -->`)) {
       return cmd;
     }
   }
 
-  return detectLegacyClaudeCommand(content);
+  return detectLegacyClaudeCommand(content, filename);
 }
 
 // Walk every managed file, key its captured extension by command (not by
@@ -272,7 +294,7 @@ function captureManagedExtensionsByCommand(
       continue;
     }
     const content = readFileSync(filePath, 'utf8');
-    const command = identifyManagedCommand(content);
+    const command = identifyManagedCommand(content, filename);
     if (!command) {
       continue;
     }

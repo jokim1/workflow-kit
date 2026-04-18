@@ -1053,6 +1053,10 @@ test('legacy pipelane.md (no marker) is upgraded in place on next setup', () => 
         'npm run pipelane:board',
         '```',
         '',
+        '## Pipelane Board (default)',
+        '',
+        'Open the dashboard.',
+        '',
       ].join('\n'),
       'utf8',
     );
@@ -1108,12 +1112,226 @@ test('unrelated pre-existing pipelane.md raises collision instead of silently cl
 test('resolveWorkflowAliases rejects aliases that collide with MANAGED_EXTRA_COMMANDS filenames', async () => {
   // Defense in depth: if a consumer aliases an operator command to
   // `/pipelane`, two writers would fight over the same file. Catch that
-  // at config-load time with a clear error.
+  // at config-load time with a clear error. Tight regex: the error must
+  // name `pipelane` (the reservation) as the conflict source and `new`
+  // as the current command, proving the reservation loop (not a later
+  // operator-to-operator collision) fired.
   const { resolveWorkflowAliases } = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
   assert.throws(
     () => resolveWorkflowAliases({ new: '/pipelane' }),
-    /both resolve to \/pipelane/,
+    /pipelane and new both resolve to \/pipelane/,
   );
+  // Also confirm a valid non-colliding rename still resolves cleanly so the
+  // reservation doesn't leak state into subsequent operator-command resolution.
+  assert.doesNotThrow(() => resolveWorkflowAliases({ new: '/branch' }));
+  // And unknown keys (including the reserved extras) are rejected by the
+  // strict validator — pipelane is not a WorkflowCommand key, so `aliases.pipelane`
+  // is never a valid consumer config.
+  assert.throws(
+    () => resolveWorkflowAliases({ pipelane: '/foo' }),
+    /Unknown workflow alias key/,
+  );
+});
+
+test('pipelane.md consumer-extension survives when a different operator command is aliased', () => {
+  // Cross-contamination guard: renaming `clean → /janitor` prunes clean.md
+  // and writes janitor.md, but pipelane.md sits in MANAGED_EXTRA_COMMANDS
+  // so its fixed filename + consumer-extension content must be untouched.
+  // If the extras-loop capture/write ordering ever drifts (e.g., extras
+  // render before capture, or ManagedCommand keys collide across sets),
+  // this test catches it.
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const pipelanePath = path.join(repoRoot, '.claude', 'commands', 'pipelane.md');
+    const pipelaneSeeded = readFileSync(pipelanePath, 'utf8').replace(
+      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      [
+        '<!-- workflow-kit:consumer-extension:start -->',
+        'PIPELANE-EXT-SENTINEL',
+        '<!-- workflow-kit:consumer-extension:end -->',
+      ].join('\n'),
+    );
+    writeFileSync(pipelanePath, pipelaneSeeded, 'utf8');
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.aliases = { ...(config.aliases ?? {}), clean: '/janitor' };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    assert.equal(existsSync(path.join(repoRoot, '.claude', 'commands', 'clean.md')), false);
+    assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'janitor.md')));
+    const after = readFileSync(pipelanePath, 'utf8');
+    assert.match(after, /PIPELANE-EXT-SENTINEL/);
+    assert.match(after, /<!-- workflow-kit:command:pipelane -->/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('pipelane.md consumer-extension persists when syncDocs.claudeCommands flips true -> false -> true', () => {
+  // Opt-out is sticky (content untouched), opt-back-in re-injects captured
+  // extension into the regenerated marker-bearing file. A capture/write
+  // ordering regression in the extras loop would drop the sentinel here.
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const pipelanePath = path.join(repoRoot, '.claude', 'commands', 'pipelane.md');
+    const seeded = readFileSync(pipelanePath, 'utf8').replace(
+      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      [
+        '<!-- workflow-kit:consumer-extension:start -->',
+        'FLIP-SENTINEL',
+        '<!-- workflow-kit:consumer-extension:end -->',
+      ].join('\n'),
+    );
+    writeFileSync(pipelanePath, seeded, 'utf8');
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+
+    config.syncDocs = { claudeCommands: false };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+    assert.match(readFileSync(pipelanePath, 'utf8'), /FLIP-SENTINEL/);
+
+    config.syncDocs = { claudeCommands: true };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const after = readFileSync(pipelanePath, 'utf8');
+    assert.match(after, /FLIP-SENTINEL/);
+    assert.match(after, /<!-- workflow-kit:command:pipelane -->/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('partial legacy-signature match on pipelane.md is treated as collision, not upgrade', () => {
+  // detectLegacyClaudeCommand requires `every` signature to match. A file
+  // with only the first-line description (no `npm run pipelane:board`)
+  // must NOT be silently upgraded — the AND contract prevents false-
+  // positive clobber. A future change weakening it to OR would break
+  // this test.
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    rmSync(path.join(repoRoot, '.claude', 'commands', 'pipelane.md'), { force: true });
+    rmSync(path.join(repoRoot, '.claude', 'commands', '.workflow-kit-managed.json'), { force: true });
+    writeFileSync(
+      path.join(repoRoot, '.claude', 'commands', 'pipelane.md'),
+      'Run a Pipelane subcommand for this repo.\n\nCustom consumer body, no npm script mention.\n',
+      'utf8',
+    );
+
+    const result = spawnSync('node', [path.join(KIT_ROOT, 'src', 'cli.ts'), 'setup'], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.notEqual(result.status, 0, 'partial signature must not silently upgrade');
+    assert.match(result.stderr, /pipelane\.md/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('legacy pipelane signatures are gated by filename to prevent consumer-file false positives', () => {
+  // Defense against data loss: a consumer-authored `.claude/commands/
+  // my-pipelane-notes.md` that happens to contain both pipelane legacy
+  // signatures (e.g., a cheatsheet that quotes the first line + the
+  // board npm script) must NOT be mis-classified as managed. If it
+  // were, the readdirSync scan adds it to managedFiles, desiredFiles
+  // doesn't include that filename, and pruneManagedClaudeCommands
+  // unlinks it. The extras-specific filename gate in
+  // detectLegacyClaudeCommand prevents that clobber.
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const decoyPath = path.join(repoRoot, '.claude', 'commands', 'my-pipelane-notes.md');
+    writeFileSync(
+      decoyPath,
+      [
+        '# My pipelane cheatsheet',
+        '',
+        'Run a Pipelane subcommand for this repo.',
+        '',
+        '```bash',
+        'npm run pipelane:board',
+        '```',
+        '',
+        '## Pipelane Board (default)',
+        '',
+        'Consumer-authored notes — not managed.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    assert.ok(existsSync(decoyPath), 'my-pipelane-notes.md was clobbered by false-positive legacy detection');
+    assert.match(readFileSync(decoyPath, 'utf8'), /Consumer-authored notes — not managed\./);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('every MANAGED_COMMANDS member has a valid LEGACY_CLAUDE_SIGNATURES entry', async () => {
+  // Kit-time invariant: a future contributor adding a command to
+  // MANAGED_EXTRA_COMMANDS must also ship a legacy-signature entry or
+  // existing consumer files without a marker will fail the in-place
+  // upgrade (detectLegacyClaudeCommand returns null -> collision error).
+  const { MANAGED_COMMANDS } = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const docs = await import(path.join(KIT_ROOT, 'src', 'operator', 'docs.ts'));
+  assert.ok(docs.LEGACY_CLAUDE_SIGNATURES, 'LEGACY_CLAUDE_SIGNATURES must be exported for structural validation');
+  for (const cmd of MANAGED_COMMANDS) {
+    const sigs = docs.LEGACY_CLAUDE_SIGNATURES[cmd];
+    assert.ok(Array.isArray(sigs), `${cmd} missing signatures array`);
+    assert.ok(sigs.length >= 2, `${cmd} needs >= 2 signatures (description + npm script)`);
+    for (const s of sigs) {
+      assert.equal(typeof s, 'string');
+      assert.ok(s.length > 0, `${cmd} has an empty signature entry`);
+    }
+  }
+});
+
+test('pipelane.md template body contains every LEGACY_CLAUDE_SIGNATURES[pipelane] string', async () => {
+  // Template↔signature coupling: if a future template edit drops one of
+  // the legacy signatures (e.g., renames pipelane:board), existing
+  // pre-marker consumer files stop being detected as legacy on the next
+  // setup and the upgrade silently regresses to a collision error. This
+  // CI invariant keeps them synchronized.
+  const docs = await import(path.join(KIT_ROOT, 'src', 'operator', 'docs.ts'));
+  const templatePath = path.join(KIT_ROOT, 'templates', '.claude', 'commands', 'pipelane.md');
+  const template = readFileSync(templatePath, 'utf8');
+  for (const signature of docs.LEGACY_CLAUDE_SIGNATURES.pipelane) {
+    assert.ok(
+      template.includes(signature),
+      `pipelane.md template missing legacy signature "${signature}" — legacy detection will drift`,
+    );
+  }
 });
 
 test('consumer-extension ignores malformed marker pairs without crashing', () => {
