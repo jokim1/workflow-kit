@@ -21,3 +21,6 @@ the deploy through `pipelane run api action deploy.prod --execute --confirm-toke
 using the token issued by a prior `api action deploy.prod` preflight.
 
 Display the output directly. Report the environment, SHA, surfaces, and next step.
+
+<!-- workflow-kit:consumer-extension:start -->
+<!-- workflow-kit:consumer-extension:end -->

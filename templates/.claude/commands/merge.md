@@ -15,3 +15,6 @@ This command:
 4. Records the merged SHA for later deploy flow.
 
 Display the output directly. Report the merged SHA and the next step.
+
+<!-- workflow-kit:consumer-extension:start -->
+<!-- workflow-kit:consumer-extension:end -->

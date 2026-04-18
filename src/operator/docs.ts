@@ -27,6 +27,8 @@ const CONTRIBUTING_MARKER_END = '<!-- workflow-kit:contributing:end -->';
 const AGENTS_MARKER_START = '<!-- workflow-kit:agents:start -->';
 const AGENTS_MARKER_END = '<!-- workflow-kit:agents:end -->';
 const CLAUDE_COMMAND_MARKER = '<!-- workflow-kit:command:';
+const CONSUMER_EXTENSION_MARKER_START = '<!-- workflow-kit:consumer-extension:start -->';
+const CONSUMER_EXTENSION_MARKER_END = '<!-- workflow-kit:consumer-extension:end -->';
 const MANAGED_CLAUDE_COMMANDS_FILENAME = '.workflow-kit-managed.json';
 // Two-signature legacy detection: first-line description + the command's
 // npm script prefix. Truncated to `npm run workflow:<cmd>` so the match
@@ -186,6 +188,41 @@ function saveManagedClaudeCommands(commandsDir: string, desiredFiles: Set<string
   });
 }
 
+function extractConsumerExtension(content: string): string | null {
+  const startIndex = content.indexOf(CONSUMER_EXTENSION_MARKER_START);
+  const endIndex = content.indexOf(CONSUMER_EXTENSION_MARKER_END);
+  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+    return null;
+  }
+
+  const innerStart = startIndex + CONSUMER_EXTENSION_MARKER_START.length;
+  const inner = content.slice(innerStart, endIndex);
+  // Strip the single leading/trailing newline that brackets the marker line
+  // itself. Anything deeper than that (including blank lines the consumer
+  // deliberately placed inside the extension) is preserved verbatim.
+  const trimmed = inner.replace(/^\n/, '').replace(/\n$/, '');
+  return trimmed;
+}
+
+function applyConsumerExtension(rendered: string, existingContent: string | null): string {
+  if (existingContent === null) {
+    return rendered;
+  }
+
+  const captured = extractConsumerExtension(existingContent);
+  if (captured === null || captured.length === 0) {
+    return rendered;
+  }
+
+  const emptyMarkerPair = `${CONSUMER_EXTENSION_MARKER_START}\n${CONSUMER_EXTENSION_MARKER_END}`;
+  if (!rendered.includes(emptyMarkerPair)) {
+    return rendered;
+  }
+
+  const populated = `${CONSUMER_EXTENSION_MARKER_START}\n${captured}\n${CONSUMER_EXTENSION_MARKER_END}`;
+  return rendered.replace(emptyMarkerPair, populated);
+}
+
 function replaceMarkedSection(targetPath: string, startMarker: string, endMarker: string, rendered: string, defaultHeading = ''): void {
   const existing = existsSync(targetPath) ? readFileSync(targetPath, 'utf8') : '';
   const section = `${startMarker}\n${rendered.trimEnd()}\n${endMarker}`;
@@ -265,7 +302,10 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
   for (const name of WORKFLOW_COMMANDS) {
     const rendered = renderTemplate(readTemplate(`.claude/commands/${name}.md`), config);
     const commandFilename = `${aliasCommandName(aliases[name])}.md`;
-    writeFileSync(path.join(commandsDir, commandFilename), rendered, 'utf8');
+    const targetPath = path.join(commandsDir, commandFilename);
+    const existingContent = existsSync(targetPath) ? readFileSync(targetPath, 'utf8') : null;
+    const output = applyConsumerExtension(rendered, existingContent);
+    writeFileSync(targetPath, output, 'utf8');
   }
   saveManagedClaudeCommands(commandsDir, desiredCommandFiles);
 

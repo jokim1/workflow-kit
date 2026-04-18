@@ -19,3 +19,6 @@ Behavior:
 3. If the saved workspace is gone, directs the user back to `{{ALIAS_NEW}}`.
 
 Display the output directly. Call out that the chat/workspace has not moved automatically yet.
+
+<!-- workflow-kit:consumer-extension:start -->
+<!-- workflow-kit:consumer-extension:end -->

@@ -21,3 +21,6 @@ Rules:
 - `--apply` without `--task` or `--all-stale` is rejected — the operator refuses to guess scope.
 - Locks updated in the last 5 minutes are preserved even when scope is set; they may belong to an in-progress task.
 - Do not assume worktrees should be deleted automatically.
+
+<!-- workflow-kit:consumer-extension:start -->
+<!-- workflow-kit:consumer-extension:end -->

@@ -18,3 +18,6 @@ This command:
 If the worktree is dirty and no `--title` is provided for a new PR, the command fails.
 
 Display the output directly. Report the PR URL and the next step.
+
+<!-- workflow-kit:consumer-extension:start -->
+<!-- workflow-kit:consumer-extension:end -->

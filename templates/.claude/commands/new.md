@@ -25,3 +25,6 @@ This command:
 5. Generates a `task-<hex>` slug when `--task` is omitted.
 
 Display the output directly. Call out that the chat/workspace has not moved automatically yet.
+
+<!-- workflow-kit:consumer-extension:start -->
+<!-- workflow-kit:consumer-extension:end -->
