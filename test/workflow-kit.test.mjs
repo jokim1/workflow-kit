@@ -852,6 +852,288 @@ test('legacy workflow-generated Claude commands and Codex skills are pruned on a
   }
 });
 
+test('consumer-extension markers preserve inner content across re-sync and template changes', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
+    const firstPass = readFileSync(cleanPath, 'utf8');
+    assert.match(firstPass, /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/);
+
+    const extended = firstPass.replace(
+      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      [
+        '<!-- workflow-kit:consumer-extension:start -->',
+        '## ROCKETBOARD GIT-JANITOR SECTION',
+        '',
+        'Run `npm run git:cleanup -- --apply` to prune stale branches.',
+        '<!-- workflow-kit:consumer-extension:end -->',
+      ].join('\n'),
+    );
+    writeFileSync(cleanPath, extended, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const preserved = readFileSync(cleanPath, 'utf8');
+    assert.match(preserved, /## ROCKETBOARD GIT-JANITOR SECTION/);
+    assert.match(preserved, /npm run git:cleanup -- --apply/);
+    // The rendered pipelane body is unchanged: first-line marker + the
+    // canonical template opening line still match.
+    assert.match(preserved, /<!-- workflow-kit:command:clean -->/);
+    assert.match(preserved, /Report workflow cleanup status and prune stale task locks when requested\./);
+
+    // Bonus: mutate the upstream template body inside a throwaway kit copy
+    // and verify the consumer extension survives when pipelane re-renders
+    // with the new body.
+    const tmpKit = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-mutated-'));
+    try {
+      cpSync(path.join(KIT_ROOT, 'src'), path.join(tmpKit, 'src'), { recursive: true });
+      cpSync(path.join(KIT_ROOT, 'templates'), path.join(tmpKit, 'templates'), { recursive: true });
+
+      const mutatedTemplatePath = path.join(tmpKit, 'templates', '.claude', 'commands', 'clean.md');
+      const mutatedTemplate = readFileSync(mutatedTemplatePath, 'utf8').replace(
+        'Report workflow cleanup status and prune stale task locks when requested.',
+        'MUTATED BODY SENTINEL — templates can change without losing local extensions.',
+      );
+      writeFileSync(mutatedTemplatePath, mutatedTemplate, 'utf8');
+
+      const mutatedCli = path.join(tmpKit, 'src', 'cli.ts');
+      const result = spawnSync('node', [mutatedCli, 'setup'], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: codexHome },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      assert.equal(result.status, 0, result.stderr);
+
+      const afterMutation = readFileSync(cleanPath, 'utf8');
+      assert.match(afterMutation, /MUTATED BODY SENTINEL/);
+      assert.match(afterMutation, /## ROCKETBOARD GIT-JANITOR SECTION/);
+      assert.match(afterMutation, /npm run git:cleanup -- --apply/);
+    } finally {
+      rmSync(tmpKit, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('consumer-extension preserve logic follows aliased filenames', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.aliases.clean = '/cleanup';
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const aliasedPath = path.join(repoRoot, '.claude', 'commands', 'cleanup.md');
+    const firstPass = readFileSync(aliasedPath, 'utf8');
+    assert.match(firstPass, /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/);
+
+    const extended = firstPass.replace(
+      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      [
+        '<!-- workflow-kit:consumer-extension:start -->',
+        'ALIASED EXTENSION SENTINEL',
+        '<!-- workflow-kit:consumer-extension:end -->',
+      ].join('\n'),
+    );
+    writeFileSync(aliasedPath, extended, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const preserved = readFileSync(aliasedPath, 'utf8');
+    assert.match(preserved, /ALIASED EXTENSION SENTINEL/);
+    assert.match(preserved, /<!-- workflow-kit:command:clean -->/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('every managed command template renders with an empty consumer-extension marker pair', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    // CI invariant: if a future template edit accidentally drops the
+    // empty marker pair, consumer extensions would silently vanish on
+    // the next re-sync. This test catches that at kit-time.
+    for (const cmd of ['clean', 'deploy', 'devmode', 'merge', 'new', 'pr', 'resume']) {
+      const contents = readFileSync(path.join(repoRoot, '.claude', 'commands', `${cmd}.md`), 'utf8');
+      assert.match(
+        contents,
+        /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/,
+        `${cmd}.md missing empty consumer-extension marker pair`,
+      );
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('consumer-extension preservation works for every managed command', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const commands = ['clean', 'deploy', 'devmode', 'merge', 'new', 'pr', 'resume'];
+    for (const cmd of commands) {
+      const p = path.join(repoRoot, '.claude', 'commands', `${cmd}.md`);
+      const seeded = readFileSync(p, 'utf8').replace(
+        '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+        [
+          '<!-- workflow-kit:consumer-extension:start -->',
+          `SENTINEL-${cmd}`,
+          '<!-- workflow-kit:consumer-extension:end -->',
+        ].join('\n'),
+      );
+      writeFileSync(p, seeded, 'utf8');
+    }
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    for (const cmd of commands) {
+      const after = readFileSync(path.join(repoRoot, '.claude', 'commands', `${cmd}.md`), 'utf8');
+      assert.match(after, new RegExp(`SENTINEL-${cmd}`), `${cmd}.md dropped its sentinel on re-sync`);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('consumer-extension ignores malformed marker pairs without crashing', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
+    const emptyPair = '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->';
+    const base = readFileSync(cleanPath, 'utf8');
+
+    const cases = [
+      { label: 'start-only', body: base.replace(emptyPair, '<!-- workflow-kit:consumer-extension:start -->\nSTRAY') },
+      { label: 'end-only', body: base.replace(emptyPair, 'STRAY\n<!-- workflow-kit:consumer-extension:end -->') },
+      { label: 'reversed', body: base.replace(emptyPair, '<!-- workflow-kit:consumer-extension:end -->\nSTRAY\n<!-- workflow-kit:consumer-extension:start -->') },
+    ];
+
+    for (const { label, body } of cases) {
+      writeFileSync(cleanPath, body, 'utf8');
+      runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+      const after = readFileSync(cleanPath, 'utf8');
+      assert.doesNotMatch(after, /STRAY/, `${label}: stray content should not have been preserved`);
+      assert.match(after, new RegExp('<!-- workflow-kit:consumer-extension:start -->\\n<!-- workflow-kit:consumer-extension:end -->'), `${label}: expected canonical empty marker pair`);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('consumer-extension preserves content even when it contains a nested end-marker literal', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
+    // Consumer pastes documentation that references the marker literal.
+    // Using lastIndexOf for the end marker guards against the first
+    // (inner) `:end -->` truncating the extension on the next re-sync.
+    const withNestedMarker = readFileSync(cleanPath, 'utf8').replace(
+      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      [
+        '<!-- workflow-kit:consumer-extension:start -->',
+        'Our protocol closes with `<!-- workflow-kit:consumer-extension:end -->` on its own line.',
+        'KEEP-ME-AFTER-NESTED-MARKER',
+        '<!-- workflow-kit:consumer-extension:end -->',
+      ].join('\n'),
+    );
+    writeFileSync(cleanPath, withNestedMarker, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const preserved = readFileSync(cleanPath, 'utf8');
+    assert.match(preserved, /KEEP-ME-AFTER-NESTED-MARKER/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('consumer-extension survives an alias rename after the content was added', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
+    const withExtension = readFileSync(cleanPath, 'utf8').replace(
+      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      [
+        '<!-- workflow-kit:consumer-extension:start -->',
+        'RENAME-MIGRATION-SENTINEL',
+        '<!-- workflow-kit:consumer-extension:end -->',
+      ].join('\n'),
+    );
+    writeFileSync(cleanPath, withExtension, 'utf8');
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.aliases.clean = '/cleanup';
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    assert.equal(existsSync(cleanPath), false, 'old clean.md should have been pruned');
+    const renamedPath = path.join(repoRoot, '.claude', 'commands', 'cleanup.md');
+    const migrated = readFileSync(renamedPath, 'utf8');
+    assert.match(migrated, /RENAME-MIGRATION-SENTINEL/);
+    assert.match(migrated, /<!-- workflow-kit:command:clean -->/);
+
+    // Rename a second time — content should still follow the command.
+    const updatedConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+    updatedConfig.aliases.clean = '/janitor';
+    writeFileSync(configPath, `${JSON.stringify(updatedConfig, null, 2)}\n`, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    assert.equal(existsSync(renamedPath), false, 'intermediate cleanup.md should have been pruned');
+    const finalPath = path.join(repoRoot, '.claude', 'commands', 'janitor.md');
+    const finalContent = readFileSync(finalPath, 'utf8');
+    assert.match(finalContent, /RENAME-MIGRATION-SENTINEL/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('Codex alias wrappers stay safe when different repos map the same alias differently', () => {
   const repoOne = createRepo();
   const repoTwo = createRepo();
