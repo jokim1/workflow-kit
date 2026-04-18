@@ -414,6 +414,20 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
     mkdirSync(commandsDir, { recursive: true });
 
     const aliases = resolveWorkflowAliases(config.aliases);
+    // Enforce operator/extras filename uniqueness only when claudeCommands
+    // is actually syncing. A consumer who opts out entirely can legitimately
+    // keep an `aliases.new = '/pipelane'` in their config without triggering
+    // the two-writer collision this guard prevents — the collision only
+    // materializes when both loops below would write to the same file.
+    for (const [command, alias] of Object.entries(aliases)) {
+      for (const extra of MANAGED_EXTRA_COMMANDS) {
+        if (alias === `/${extra}`) {
+          throw new Error(
+            `Workflow aliases must be unique. ${extra} and ${command} both resolve to ${alias}.`,
+          );
+        }
+      }
+    }
     const managedCommandFiles = loadManagedClaudeCommands(commandsDir);
     // Capture before prune so the extension follows the command through
     // alias renames (old filename gets pruned but its content survives).

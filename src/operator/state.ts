@@ -659,7 +659,7 @@ export function resolveWorkflowAliases(
   aliases: Partial<Record<WorkflowCommand, string>> | Record<string, string> | undefined,
 ): Record<WorkflowCommand, string> {
   const next = {} as Record<WorkflowCommand, string>;
-  const seen = new Map<string, ManagedCommand>();
+  const seen = new Map<string, WorkflowCommand>();
 
   // Flag typos like `cleanup: '/cleanup'` when the actual command is `clean`
   // before silently dropping them. The user gets told which keys pipelane
@@ -672,13 +672,6 @@ export function resolveWorkflowAliases(
         `Unknown workflow alias key(s): ${unknown.join(', ')}. Known keys: ${WORKFLOW_COMMANDS.join(', ')}.`,
       );
     }
-  }
-
-  // Reserve MANAGED_EXTRA_COMMANDS filenames (e.g. /pipelane) so an
-  // operator alias can't collide with them and silently fight over the
-  // same `.claude/commands/<name>.md` target on every re-sync.
-  for (const extra of MANAGED_EXTRA_COMMANDS) {
-    seen.set(`/${extra}`, extra);
   }
 
   for (const command of WORKFLOW_COMMANDS) {

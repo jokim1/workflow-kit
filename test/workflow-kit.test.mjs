@@ -1109,28 +1109,84 @@ test('unrelated pre-existing pipelane.md raises collision instead of silently cl
   }
 });
 
-test('resolveWorkflowAliases rejects aliases that collide with MANAGED_EXTRA_COMMANDS filenames', async () => {
-  // Defense in depth: if a consumer aliases an operator command to
-  // `/pipelane`, two writers would fight over the same file. Catch that
-  // at config-load time with a clear error. Tight regex: the error must
-  // name `pipelane` (the reservation) as the conflict source and `new`
-  // as the current command, proving the reservation loop (not a later
-  // operator-to-operator collision) fired.
+test('setup rejects operator aliases that collide with MANAGED_EXTRA_COMMANDS filenames when claudeCommands is syncing', () => {
+  // Two writers (operator command + extras loop) would fight for the same
+  // .claude/commands/pipelane.md file on every re-sync. Catch that at the
+  // point where the collision actually materializes, not at config-load
+  // time — a consumer who opts out of claudeCommands never hits the
+  // collision and shouldn't be blocked from aliasing /pipelane.
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.aliases.new = '/pipelane';
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    const result = spawnSync('node', [path.join(KIT_ROOT, 'src', 'cli.ts'), 'setup'], {
+      cwd: repoRoot,
+      env: { ...process.env, CODEX_HOME: codexHome },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.notEqual(result.status, 0, 'setup should refuse a config where two writers fight for pipelane.md');
+    assert.match(result.stderr, /pipelane and new both resolve to \/pipelane/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('setup allows /pipelane operator alias when claudeCommands syncing is disabled', () => {
+  // Addresses Codex P2: if a consumer opts out of claudeCommands entirely,
+  // the extras loop never runs — no collision can happen. Blocking that
+  // config at load time (which the old reservation did) would be a soft
+  // regression for repos that just want the state machine, not the .claude/
+  // command files. Only enforce when the collision actually materializes.
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.aliases.new = '/pipelane';
+    // packageScripts must stay on so `workflow:*` scripts exist; claudeCommands
+    // off is the operative opt-out here.
+    config.syncDocs = { claudeCommands: false };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    // Wipe init-written command files so the next setup path exercises the
+    // "claudeCommands false, nothing to regen" branch cleanly.
+    rmSync(path.join(repoRoot, '.claude'), { recursive: true, force: true });
+
+    const result = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+    assert.match(result.stdout, /Pipelane setup complete/);
+    // Non-command surfaces still synced.
+    assert.ok(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')));
+    // No .claude/commands/ got regenerated, so no collision fired.
+    assert.equal(existsSync(path.join(repoRoot, '.claude', 'commands')), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('resolveWorkflowAliases still rejects unknown aliases (pipelane is not a WorkflowCommand key)', async () => {
+  // The strict-validator for unknown keys is unchanged — `aliases.pipelane`
+  // is not a valid consumer config because pipelane isn't a WorkflowCommand
+  // (it's a MANAGED_EXTRA_COMMAND with a fixed filename, not aliased).
   const { resolveWorkflowAliases } = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
-  assert.throws(
-    () => resolveWorkflowAliases({ new: '/pipelane' }),
-    /pipelane and new both resolve to \/pipelane/,
-  );
-  // Also confirm a valid non-colliding rename still resolves cleanly so the
-  // reservation doesn't leak state into subsequent operator-command resolution.
-  assert.doesNotThrow(() => resolveWorkflowAliases({ new: '/branch' }));
-  // And unknown keys (including the reserved extras) are rejected by the
-  // strict validator — pipelane is not a WorkflowCommand key, so `aliases.pipelane`
-  // is never a valid consumer config.
   assert.throws(
     () => resolveWorkflowAliases({ pipelane: '/foo' }),
     /Unknown workflow alias key/,
   );
+  assert.doesNotThrow(() => resolveWorkflowAliases({ new: '/pipelane' }),
+    'resolveWorkflowAliases should be purely syntactic; collision detection moved to syncConsumerDocs');
 });
 
 test('pipelane.md consumer-extension survives when a different operator command is aliased', () => {
