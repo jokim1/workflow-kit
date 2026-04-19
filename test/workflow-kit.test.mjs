@@ -5323,3 +5323,202 @@ test('setBy whitelist allows GitHub bot actors like dependabot[bot]', async () =
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// v1.2 doctor.* coverage
+// ---------------------------------------------------------------------------
+
+function writeStaleProbeState(repoRoot, surfaces, { ageMs = 25 * 60 * 60 * 1000, ok = true } = {}) {
+  const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+  mkdirSync(stateDir, { recursive: true });
+  const probedAt = new Date(Date.now() - ageMs).toISOString();
+  const records = surfaces.map((surface) => ({
+    environment: 'staging',
+    surface,
+    url: `https://staging.example.test/${surface}-health`,
+    ok,
+    statusCode: ok ? 200 : 503,
+    latencyMs: 25,
+    error: ok ? undefined : 'HTTP 503',
+    probedAt,
+  }));
+  writeFileSync(
+    path.join(stateDir, 'probe-state.json'),
+    JSON.stringify({ records, updatedAt: probedAt }, null, 2),
+    'utf8',
+  );
+}
+
+test('doctor.collectProbeTargets picks up only configured healthcheck surfaces', async () => {
+  const doctor = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'doctor.ts'));
+  const base = buildFullDeployConfig();
+
+  // Full config: frontend staging + prod + edge staging + edge prod + sql staging + sql prod.
+  assert.deepEqual(
+    doctor.collectProbeTargets(base).map((t) => `${t.environment}:${t.surface}`).sort(),
+    ['production:edge', 'production:frontend', 'production:sql', 'staging:edge', 'staging:frontend', 'staging:sql'],
+  );
+
+  // Drop edge + sql healthcheck URLs: only frontend (which uses url as fallback)
+  // should remain probable.
+  const minimal = JSON.parse(JSON.stringify(base));
+  minimal.edge.staging.healthcheckUrl = '';
+  minimal.edge.production.healthcheckUrl = '';
+  minimal.sql.staging.healthcheckUrl = '';
+  minimal.sql.production.healthcheckUrl = '';
+  assert.deepEqual(
+    doctor.collectProbeTargets(minimal).map((t) => `${t.environment}:${t.surface}`).sort(),
+    ['production:frontend', 'staging:frontend'],
+  );
+
+  // Falls back to url when healthcheckUrl is blank on frontend.
+  const fallback = JSON.parse(JSON.stringify(minimal));
+  fallback.frontend.staging.healthcheckUrl = '';
+  fallback.frontend.production.healthcheckUrl = '';
+  const targets = doctor.collectProbeTargets(fallback);
+  assert.equal(targets.find((t) => t.environment === 'staging' && t.surface === 'frontend').url, 'https://staging.example.test');
+  assert.equal(targets.find((t) => t.environment === 'production' && t.surface === 'frontend').url, 'https://app.example.test');
+});
+
+test('doctor.mergeProbeRecords keeps previously-probed surfaces across a partial re-probe', async () => {
+  const doctor = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'doctor.ts'));
+  const previous = [
+    { environment: 'staging', surface: 'frontend', url: 'u', ok: true, statusCode: 200, latencyMs: 1, probedAt: '2026-04-18T00:00:00.000Z' },
+    { environment: 'staging', surface: 'edge', url: 'u', ok: true, statusCode: 200, latencyMs: 1, probedAt: '2026-04-18T00:00:00.000Z' },
+    { environment: 'staging', surface: 'sql', url: 'u', ok: true, statusCode: 200, latencyMs: 1, probedAt: '2026-04-18T00:00:00.000Z' },
+  ];
+  const incoming = [
+    { environment: 'staging', surface: 'frontend', url: 'u', ok: false, statusCode: 503, latencyMs: 99, error: 'HTTP 503', probedAt: '2026-04-19T00:00:00.000Z' },
+  ];
+  const merged = doctor.mergeProbeRecords(previous, incoming);
+
+  assert.equal(merged.length, 3, 'edge + sql preserved after a frontend-only re-probe');
+  const byKey = Object.fromEntries(merged.map((r) => [`${r.environment}:${r.surface}`, r]));
+  assert.equal(byKey['staging:frontend'].ok, false, 'frontend overwritten');
+  assert.equal(byKey['staging:frontend'].probedAt, '2026-04-19T00:00:00.000Z');
+  assert.equal(byKey['staging:edge'].probedAt, '2026-04-18T00:00:00.000Z', 'edge untouched');
+  assert.equal(byKey['staging:sql'].probedAt, '2026-04-18T00:00:00.000Z', 'sql untouched');
+});
+
+test('doctor.detectPlatform honors fly.toml / vercel.json / netlify.toml / gh-actions signals', async () => {
+  const doctor = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'doctor.ts'));
+  const releaseGate = await import(path.join(KIT_ROOT, 'src', 'operator', 'release-gate.ts'));
+
+  function runFixture(files) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-doctor-platform-'));
+    try {
+      for (const [relative, content] of Object.entries(files)) {
+        const target = path.join(dir, relative);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, content, 'utf8');
+      }
+      return doctor.detectPlatform(dir, releaseGate.emptyDeployConfig());
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const fly = runFixture({ 'fly.toml': 'app = "demo"\n' });
+  assert.equal(fly.detected, 'fly.io');
+  assert.ok(fly.sources.includes('fly.toml'));
+
+  const vercel = runFixture({ 'vercel.json': '{}' });
+  assert.equal(vercel.detected, 'vercel');
+
+  const netlify = runFixture({ 'netlify.toml': '[build]\n' });
+  assert.equal(netlify.detected, 'netlify');
+
+  // GitHub Actions is a weak signal — should surface as detected when
+  // no stronger hint is present.
+  const gh = runFixture({ '.github/workflows/deploy.yml': 'name: Deploy\n' });
+  assert.equal(gh.detected, 'github-actions');
+  assert.ok(gh.sources.includes('.github/workflows/'));
+
+  // Stronger platform signal wins over a co-present .github/workflows dir.
+  const flyWithActions = runFixture({
+    'fly.toml': 'app = "demo"\n',
+    '.github/workflows/ci.yml': 'name: CI\n',
+  });
+  assert.equal(flyWithActions.detected, 'fly.io');
+});
+
+test('doctor --fix via PIPELANE_DOCTOR_FIX_STUB writes the Deploy Configuration block and runs a probe', () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+
+    const stub = {
+      platform: 'fly.io',
+      frontendStagingUrl: 'https://staging.example.test',
+      frontendStagingHealthcheck: 'https://staging.example.test/health',
+      frontendProductionUrl: 'https://app.example.test',
+      frontendProductionHealthcheck: 'https://app.example.test/health',
+    };
+
+    // --fix rejects --json (the guard exists because interactive wizards
+    // can't sanely speak JSON); the STUB env var is what makes it
+    // scriptable without a TTY.
+    runCli(['run', 'doctor', '--fix'], repoRoot, {
+      PIPELANE_DOCTOR_FIX_STUB: JSON.stringify(stub),
+      PIPELANE_DOCTOR_PROBE_STUB_STATUS: '200',
+    });
+
+    const claude = readFileSync(path.join(repoRoot, 'CLAUDE.md'), 'utf8');
+    assert.match(claude, /"platform": "fly.io"/);
+    assert.match(claude, /"url": "https:\/\/staging.example.test"/);
+
+    const probeStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'probe-state.json');
+    assert.ok(existsSync(probeStatePath), 'probe-state.json created by --fix auto-probe');
+    const probe = JSON.parse(readFileSync(probeStatePath, 'utf8'));
+    const frontend = probe.records.find((r) => r.environment === 'staging' && r.surface === 'frontend');
+    assert.ok(frontend, 'frontend staging probe recorded');
+    assert.equal(frontend.ok, true);
+    assert.equal(frontend.statusCode, 200);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('release-check blocks when staging probe is stale (>24h old)', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    // Seed a succeeded staging deploy so the observed-staging gate passes —
+    // that isolates the probe gate as the only remaining blocker.
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql'], { skipProbeState: true });
+    writeStaleProbeState(repoRoot, ['frontend', 'edge', 'sql']);
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    assert.equal(output.ready, false);
+    assert.match(output.message, /probe is stale/);
+    assert.match(output.message, /workflow:doctor --probe/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('release-check blocks when staging probe is degraded (non-2xx)', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql'], { skipProbeState: true });
+    // Fresh (ageMs=0) but non-OK: probe.state === 'degraded'.
+    writeStaleProbeState(repoRoot, ['frontend', 'edge', 'sql'], { ageMs: 0, ok: false });
+
+    const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
+    const output = JSON.parse(result.stdout);
+    assert.equal(result.status, 1);
+    assert.equal(output.ready, false);
+    assert.match(output.message, /probe is degraded/);
+    assert.match(output.message, /HTTP 503|probe failed/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});

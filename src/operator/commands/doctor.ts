@@ -303,7 +303,7 @@ async function probeUrl(target: ProbeTarget, nowFn: () => Date): Promise<ProbeRe
   }
 }
 
-function mergeProbeRecords(previous: ProbeRecord[], incoming: ProbeRecord[]): ProbeRecord[] {
+export function mergeProbeRecords(previous: ProbeRecord[], incoming: ProbeRecord[]): ProbeRecord[] {
   const keyed = new Map<string, ProbeRecord>();
   for (const record of previous) {
     keyed.set(`${record.environment}:${record.surface}`, record);
