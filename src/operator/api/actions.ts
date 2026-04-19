@@ -13,7 +13,7 @@ import {
   resolveDeployStateKey,
   verifyDeployRecord,
 } from '../release-gate.ts';
-import { findLastGoodDeploy, inferActiveTaskLock } from '../commands/helpers.ts';
+import { findLastGoodDeploy, inferActiveTaskLock, resolveCommandSurfaces } from '../commands/helpers.ts';
 import {
   buildApiEnvelope,
   buildFreshness,
@@ -343,25 +343,22 @@ function resolveRollbackTargetSha(
     const trustedRecords = stateKey
       ? deployState.records.filter((record) => verifyDeployRecord(record, stateKey))
       : deployState.records;
-    // Mirror handleRollback's surface fallback chain: explicit flags
-    // win, then the active task lock's surfaces (same logic
-    // resolveCommandSurfaces applies), then config.surfaces. Task lock
-    // lookup is best-effort — no lock is a valid preflight state (the
-    // operator may be approving from outside a worktree).
-    let surfaceSource: string[];
-    if (surfaceFlags.length > 0) {
-      surfaceSource = [...surfaceFlags];
-    } else {
-      let lockSurfaces: string[] = [];
-      try {
-        const { lock } = inferActiveTaskLock(context, taskFlag);
-        lockSurfaces = lock.surfaces ?? [];
-      } catch {
-        // No active task lock — fall through to config.surfaces.
-      }
-      surfaceSource = lockSurfaces.length > 0 ? lockSurfaces : [...context.config.surfaces];
+    // Use the same resolveCommandSurfaces helper handleRollback uses at
+    // execute time. Codex caught an earlier manual reconstruction that
+    // missed modeState.requestedSurfaces + the parseSurfaceList
+    // validation step — those differences could make preflight and
+    // execute compute different targetSha values for the same inputs.
+    // Task-lock lookup is best-effort (operator may preflight without
+    // an active lock, e.g. from a dashboard UI).
+    let lockSurfaces: string[] = [];
+    try {
+      const { lock } = inferActiveTaskLock(context, taskFlag);
+      lockSurfaces = lock.surfaces ?? [];
+    } catch {
+      // No active task lock — resolveCommandSurfaces will fall through
+      // to modeState.requestedSurfaces and then config.surfaces.
     }
-    const surfaces = [...surfaceSource].sort();
+    const surfaces = [...resolveCommandSurfaces(context, surfaceFlags, lockSurfaces)].sort();
     // Current sha = latest record for this (env, surfaces); excludeSha
     // for target picks skips it.
     let currentSha = '';

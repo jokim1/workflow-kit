@@ -6819,6 +6819,46 @@ test('v1.1 codex fixup: retrying a failed rollback pins the same target sha', as
   assert.equal(buggy?.sha, 'ancientgood', 'sanity: buggy path would have picked ancientgood');
 });
 
+// Codex P1 (round 3): rollbackOfSha must survive multiple failed retries.
+// Without the fix, retry 2 sets rollbackOfSha=<target>, so retry 3's
+// excludeSha lookup skips the target and walks further back.
+test('v1.1 codex fixup r3: rollbackOfSha survives multi-retry chain', async () => {
+  const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'helpers.ts'));
+  const ok = (statusCode) => ({ healthcheckUrl: 'x', statusCode, latencyMs: 10, probes: 2 });
+  // Build a 3-retry scenario. Each retry record must have
+  // rollbackOfSha = ORIGINAL_BROKEN, not the prior target. If the code
+  // sets rollbackOfSha=currentRecord.sha on a retry, the chain drifts.
+  const ORIGINAL_BROKEN = 'brokenprod';
+  const CORRECT_TARGET = 'correcttarget';
+  const records = [
+    { environment: 'prod', sha: CORRECT_TARGET, surfaces: ['frontend'],
+      workflowName: 'X', requestedAt: '2026-04-10T00:00:00Z',
+      status: 'succeeded', verifiedAt: '2026-04-10T00:01:00Z', verification: ok(200) },
+    { environment: 'prod', sha: ORIGINAL_BROKEN, surfaces: ['frontend'],
+      workflowName: 'X', requestedAt: '2026-04-12T00:00:00Z',
+      status: 'failed', verification: ok(503) },
+    // Retry 1: dispatched, failed.
+    { environment: 'prod', sha: CORRECT_TARGET, surfaces: ['frontend'],
+      workflowName: 'X', requestedAt: '2026-04-12T01:00:00Z',
+      status: 'failed', rollbackOfSha: ORIGINAL_BROKEN, verification: ok(503) },
+    // Retry 2: simulate the CORRECTED code — rollbackOfSha carried forward.
+    { environment: 'prod', sha: CORRECT_TARGET, surfaces: ['frontend'],
+      workflowName: 'X', requestedAt: '2026-04-12T02:00:00Z',
+      status: 'failed', rollbackOfSha: ORIGINAL_BROKEN, verification: ok(503) },
+  ];
+  // For retry 3, the current record is retry 2. excludeSha should be
+  // retry2.rollbackOfSha (ORIGINAL_BROKEN), which still lets findLastGoodDeploy
+  // pick CORRECT_TARGET. Without the fix, retry 2 would have had
+  // rollbackOfSha = CORRECT_TARGET, so excludeSha would skip it.
+  const currentRecord = records[3];
+  const excludeSha = currentRecord.rollbackOfSha ?? currentRecord.sha;
+  assert.equal(excludeSha, ORIGINAL_BROKEN, 'excludeSha must be the original broken sha, not the last target');
+  const target = mod.findLastGoodDeploy({
+    records, environment: 'prod', surfaces: ['frontend'], excludeSha,
+  });
+  assert.equal(target?.sha, CORRECT_TARGET, 'retry 3 must still target the same sha');
+});
+
 test('v1.1 fixup: capDeployHistory preserves the most recent verified record per (env, surfaces)', async () => {
   const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'deploy.ts'));
   const ok = (statusCode) => ({ healthcheckUrl: 'x', statusCode, latencyMs: 10, probes: 2 });

@@ -122,13 +122,24 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
     ].join('\n'));
   }
 
-  // Security: confirm target.sha still exists locally + on origin before
-  // dispatching the gh workflow. A force-pushed-out sha would otherwise
-  // fail unpredictably (or worse, deploy HEAD of the branch instead).
+  // Security: confirm target.sha still exists both locally AND on
+  // origin before dispatching the gh workflow. gh workflow runs on
+  // GitHub, so a local-only sha (e.g. force-pushed out of origin but
+  // still in the operator's object DB) would make the downstream
+  // workflow fail at checkout or fall back to the wrong ref. Fetch
+  // origin first so `branch -r --contains` sees the latest refs.
   if (runGit(context.repoRoot, ['cat-file', '-e', '--end-of-options', target.sha], true) === null) {
     throw new Error([
       `rollback ${environment} blocked: target sha ${target.sha.slice(0, 7)} no longer exists in the local repo.`,
       'The commit may have been force-pushed out of history. Fetch origin and retry, or use --revert-pr.',
+    ].join('\n'));
+  }
+  runGit(context.repoRoot, ['fetch', 'origin', context.config.baseBranch], true);
+  const remoteRefs = runGit(context.repoRoot, ['branch', '-r', '--contains', target.sha], true);
+  if (!remoteRefs || !remoteRefs.trim()) {
+    throw new Error([
+      `rollback ${environment} blocked: target sha ${target.sha.slice(0, 7)} exists locally but is not reachable from any origin branch.`,
+      'The commit may have been force-pushed out of origin since the record was written. Push it back or use --revert-pr.',
     ].join('\n'));
   }
 
@@ -153,17 +164,19 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
   const dispatchStart = Date.now();
   const configFingerprint = computeDeployConfigFingerprint(deployConfig, environment);
 
-  // Fresh idempotency key scoped to (rollback target + current failure +
-  // surfaces + task). Distinct from a plain re-deploy of the same sha,
-  // so a rollback can't short-circuit against a pre-existing succeeded
-  // record for the target sha (which would skip the dispatch we need
-  // to replace the broken revision in the environment).
+  // Fresh idempotency key scoped to (rollback target + ORIGINAL failing
+  // sha + surfaces + task). Distinct from a plain re-deploy of the same
+  // sha, so a rollback can't short-circuit against a pre-existing
+  // succeeded record for the target sha. Using originalFailingSha (set
+  // below) keeps the key stable across retries — retry 2 has the same
+  // key as retry 1, which is the right semantics for a retry.
+  const originalFailingSha = currentRecord.rollbackOfSha ?? currentRecord.sha;
   const idempotencyKey = makeIdempotencyKey({
     environment,
     sha: target.sha,
     surfaces,
     taskSlug,
-    configFingerprint: `${configFingerprint}:rollback-from:${currentRecord.sha}`,
+    configFingerprint: `${configFingerprint}:rollback-from:${originalFailingSha}`,
   });
 
   runGh(context.repoRoot, [
@@ -180,6 +193,12 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
 
   const run = findRecentRun(context.repoRoot, workflowName, target.sha, dispatchStart);
 
+  // originalFailingSha already computed above for the idempotency key.
+  // Preserve it as the new record's rollbackOfSha — without this, a
+  // second retry would record rollbackOfSha=<target>, and a third
+  // retry's excludeSha lookup would then skip the target instead of
+  // pinning it, walking the environment further back on every failure.
+  // Codex caught this on round 3.
   let record: DeployRecord = {
     environment,
     sha: target.sha,
@@ -192,7 +211,7 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
     workflowRunUrl: run?.url,
     idempotencyKey,
     triggeredBy,
-    rollbackOfSha: currentRecord.sha,
+    rollbackOfSha: originalFailingSha,
   };
 
   persistRecord(context.commonDir, context.config, deployState.records, record);
@@ -203,7 +222,7 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
       message: [
         `Rollback dispatched (async): ${environment}`,
         `Task: ${taskSlug}`,
-        `From: ${currentRecord.sha.slice(0, 7)} (current)`,
+        `From: ${originalFailingSha.slice(0, 7)} (original failing sha)`,
         `To:   ${target.sha.slice(0, 7)} (${target.verifiedAt ? `verified ${target.verifiedAt}` : 'last-good'})`,
         `Surfaces: ${surfaces.join(', ')}`,
         `Workflow: ${workflowName}`,
@@ -290,7 +309,7 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
     context.commonDir,
     context.config,
     taskSlug,
-    `${environment} rolled back to ${target.sha.slice(0, 7)} from ${currentRecord.sha.slice(0, 7)}`,
+    `${environment} rolled back to ${target.sha.slice(0, 7)} from ${originalFailingSha.slice(0, 7)}`,
   );
 
   printResult(parsed.flags, {
@@ -298,7 +317,7 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
     message: [
       `Rollback verified: ${environment}`,
       `Task: ${taskSlug}`,
-      `From: ${currentRecord.sha}`,
+      `From: ${originalFailingSha}`,
       `To:   ${target.sha}`,
       `Surfaces: ${surfaces.join(', ')}`,
       `Workflow: ${workflowName}`,
