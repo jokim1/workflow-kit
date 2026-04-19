@@ -171,6 +171,18 @@ Actions tab.
 `--task <slug>` or `--all-stale`; refuses to prune any lock newer
 than 5 minutes.
 
+The two scope flags have different authority models:
+- `--all-stale` is evidence-based: it only prunes locks whose worktree
+  or branch is already missing. Safe blanket sweep after a cleanup pass.
+- `--task <slug>` is an operator override: it prunes the named lock
+  even if its worktree and branch are still intact. Reach for this when
+  a lock got orphaned (wrong task name, stuck deploy state) but the
+  underlying worktree is still fine. Lock removal is metadata-only;
+  the worktree and branch are untouched.
+
+Both modes respect the 5-minute age floor — `--task` will still skip a
+lock that's actively ticking.
+
 ### When build lane breaks
 
 - **CI failed on main after merge.** Run `/rollback` (v1) to redeploy

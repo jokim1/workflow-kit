@@ -337,19 +337,32 @@ export function nowIso(): string {
 // Cap at 128 chars to keep disk filenames + git branch names within
 // reasonable bounds without silently amputating human-meaningful suffixes.
 // macOS/Linux filename max is 255; git refs have no formal cap but stay
-// readable well under 128. The previous 32-char cap was aggressive enough
-// that it silently dropped trailing characters from common task names
-// like "fix-delete-project-sidebar-update" (33 chars) → "...updat",
-// which makes lock filenames look malformed to operators.
-const TASK_SLUG_MAX_LENGTH = 128;
+// readable well under 128.
+//
+// History: until #34 this was .slice(0, 32), which silently dropped
+// trailing characters from common task names like
+// "fix-delete-project-sidebar-update" (33 chars) → "...updat". #34 raised
+// the cap to 128; this commit removes the silent-truncation behavior
+// entirely — hitting the cap now throws an actionable error instead of
+// amputating. Silent truncation is the UX bug; the cap is just the
+// specific value at which the bug manifests.
+export const TASK_SLUG_MAX_LENGTH = 128;
 
 export function slugifyTaskName(taskName: string): string {
-  return taskName
+  const slug = taskName
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, TASK_SLUG_MAX_LENGTH);
+    .replace(/^-+|-+$/g, '');
+
+  if (slug.length > TASK_SLUG_MAX_LENGTH) {
+    throw new Error(
+      `Task name too long after slugification: ${slug.length} chars, max is ${TASK_SLUG_MAX_LENGTH}. ` +
+      `Original input: "${taskName}". Shorten the name and retry.`,
+    );
+  }
+
+  return slug;
 }
 
 export function runCommand(
