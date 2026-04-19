@@ -128,12 +128,15 @@ export async function handleDevmode(cwd: string, parsed: ParsedOperatorArgs): Pr
 // heuristic in deploy.ts (PIPELANE_DEPLOY_TRIGGERED_BY → GITHUB_ACTOR → USER
 // → fallback) so an override recorded in CI and one recorded locally carry
 // the right label. GITHUB_ACTOR is attacker-controlled in some CI contexts
-// (pull_request_target), so the raw value is filtered: only [A-Za-z0-9_.-]
-// survive, max 64 chars. Anything that fails the whitelist falls through to
-// the next env in the chain. This keeps a legitimate username round-trip
-// but denies a malicious actor the ability to plant ANSI escapes in
-// mode-state.json.
-const SET_BY_ALLOW = /^[A-Za-z0-9_.\-]{1,64}$/;
+// (pull_request_target), so the raw value is filtered: only the characters
+// in SET_BY_ALLOW survive, max 64 chars. Brackets `[]` are allowed so
+// GitHub bot actors (`dependabot[bot]`, `github-actions[bot]`,
+// `renovate[bot]`) round-trip; bracket alone can't form an ANSI escape
+// without the ESC byte (\x1b), which is blocked by the control-char gate
+// at every render site. Whitelist failures fall through to the next env
+// in the chain. This keeps a legitimate username round-trip but denies a
+// malicious actor the ability to plant ANSI escapes in mode-state.json.
+const SET_BY_ALLOW = /^[A-Za-z0-9_.\-[\]]{1,64}$/;
 
 function cleanSetBy(raw: string | undefined): string | null {
   if (!raw) return null;

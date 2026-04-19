@@ -5249,3 +5249,28 @@ test('WIP warn message describes post-save count so operator sees "about to star
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
+
+test('setBy whitelist allows GitHub bot actors like dependabot[bot]', async () => {
+  // Regression guard: whitelist must round-trip legitimate CI bot actors.
+  // An earlier cut rejected brackets and attributed bot-triggered overrides
+  // to the "pipelane" fallback, burying the real actor. The ESC byte
+  // (\x1b) is what actually weaponizes ANSI injection, and that's blocked
+  // at every render site — brackets alone can't form a CSI sequence.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    runCli(
+      ['run', 'devmode', 'release', '--override', '--reason', 'scheduled dep bump'],
+      repoRoot,
+      { GITHUB_ACTOR: 'dependabot[bot]', USER: '' },
+    );
+
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const context = stateMod.resolveWorkflowContext(repoRoot);
+    assert.equal(context.modeState.lastOverride?.setBy, 'dependabot[bot]',
+      `bot actor must survive the whitelist; got "${context.modeState.lastOverride?.setBy}"`);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
