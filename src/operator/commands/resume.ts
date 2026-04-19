@@ -36,13 +36,18 @@ export async function handleResume(cwd: string, parsed: ParsedOperatorArgs): Pro
           ? [`Current Dev Mode is ${context.modeState.mode}, but this task is locked to ${lock.mode}. Switch back before /pr or /merge.`]
           : [],
         reasons: ['resuming the only active task workspace'],
+        lockNextAction: lock.nextAction ?? null,
       }));
       return;
     }
 
     const lines = [
       'Active task workspaces:',
-      ...activeLocks.map((lock) => `- ${lock.taskName || lock.taskSlug}: ${lock.branchName} @ ${lock.worktreePath}`),
+      ...activeLocks.map((lock) => {
+        const breadcrumb = lock.nextAction?.trim();
+        const base = `- ${lock.taskName || lock.taskSlug}: ${lock.branchName} @ ${lock.worktreePath}`;
+        return breadcrumb ? `${base}\n  last logged step: ${breadcrumb}` : base;
+      }),
       'Next: run workflow:resume -- --task "<task-name>"',
     ];
     printResult(parsed.flags, { message: lines.join('\n') });
@@ -74,5 +79,6 @@ export async function handleResume(cwd: string, parsed: ParsedOperatorArgs): Pro
       ? [`Current Dev Mode is ${context.modeState.mode}, but this task is locked to ${lock.mode}. Switch back before /pr or /merge.`]
       : [],
     reasons: ['resuming the existing task workspace for this task'],
+    lockNextAction: lock.nextAction ?? null,
   }));
 }

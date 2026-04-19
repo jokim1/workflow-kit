@@ -154,6 +154,51 @@ and in `attention[]` with `action: 'doctor.probe'`. `stale` surfaces
 emit warnings; `healthy` and `unknown` stay silent — the release gate's
 missing-probe messaging handles the "never probed" case directly.
 
+## `/status --week / --stuck / --blast` (v1.4)
+
+`/status` accepts three mutually-exclusive view flags that produce
+alternate data views over the same state the cockpit summarizes. Only
+one may be passed per call; passing two throws. `--json` is respected
+by every view and produces a structured payload (shape described
+below).
+
+- `--week` — groups `DeployRecord` entries from the last 7 UTC days
+  into `days[]` with `succeeded`, `failed`, and `p50CycleMs`
+  (verifiedAt − requestedAt for succeeded + verified deploys). `totals`
+  covers the full window plus `distinctShas`.
+- `--stuck` — surfaces operator-actionable drift: release-mode task
+  locks idle >72h, merged PRs (last 14 days) with no DeployRecord for
+  their `mergedSha`, and staging DeployRecords without a matching
+  `succeeded` prod promotion for the same sha after 48h.
+- `--blast <sha>` — runs `git diff --name-only <base>..<sha>` and
+  groups files by `surfacePathMap`. The base anchor is the most recent
+  succeeded prod DeployRecord sha if one exists (tag `prod-deploy`),
+  otherwise the repo's `baseBranch` HEAD (`base-branch`), finally
+  `merge-base` as a last resort. Files that don't match any mapped
+  prefix fall to `other`.
+
+### `.project-workflow.json:surfacePathMap` (optional, v1.4+)
+
+Opt-in map consumed by `--blast`. Keys are surface names (typically
+entries from `surfaces`), values are POSIX directory prefixes or exact
+filenames matched against `git diff --name-only` output. Example:
+
+```json
+{
+  "surfacePathMap": {
+    "frontend": ["src/frontend/", "web/"],
+    "edge": ["src/edge/"],
+    "sql": ["supabase/", "migrations/"]
+  }
+}
+```
+
+Empty / absent = `--blast` still runs; every file lands in the `other`
+bucket and the render adds a one-line hint pointing at this key.
+Unknown keys inside the map are accepted — the key string is the
+surface label. Non-string-array values are dropped by
+`normalizeWorkflowConfig`; an all-invalid map collapses to `undefined`.
+
 ## Compatibility
 
 - Envelope schema is additive-only within a `schemaVersion`. New fields may
