@@ -467,6 +467,14 @@ export function resolveDeployTargetForTask(options: {
 // from). Matches surfaces by sorted-set equality so a rollback targeting
 // [frontend, edge] cannot pick up a [frontend]-only record.
 //
+// When `configFingerprint` is provided, candidates whose own
+// configFingerprint differs are rejected. Without this filter a
+// rollback could target a sha that was verified-good under a DIFFERENT
+// config (stale staging URL, rotated healthcheck path) — the
+// healthcheck that certified the sha may no longer exist. Legacy
+// records without a configFingerprint are accepted when the filter is
+// set, matching the fail-open posture elsewhere in the release gate.
+//
 // Returns null when no qualifying earlier record exists. Callers treat
 // null as "nothing to roll back to" and abort with a clear error.
 export function findLastGoodDeploy(options: {
@@ -474,6 +482,7 @@ export function findLastGoodDeploy(options: {
   environment: 'staging' | 'prod';
   surfaces: string[];
   excludeSha: string;
+  configFingerprint?: string;
 }): DeployRecord | null {
   const key = [...options.surfaces].sort().join(',');
   // Walk newest-first so we can short-circuit on the first qualifying hit.
@@ -487,6 +496,11 @@ export function findLastGoodDeploy(options: {
     if (record.sha === options.excludeSha) continue;
     const recordKey = [...(record.surfaces ?? [])].sort().join(',');
     if (recordKey !== key) continue;
+    if (options.configFingerprint
+      && record.configFingerprint
+      && record.configFingerprint !== options.configFingerprint) {
+      continue;
+    }
     // Require verified (2xx) liveness. v1.2 per-surface verification is
     // preferred; legacy aggregate `verification.statusCode` is accepted
     // as a fallback so pre-v1.2 records still qualify as rollback targets.

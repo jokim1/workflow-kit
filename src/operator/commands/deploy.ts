@@ -398,12 +398,51 @@ export function persistRecord(
   records: DeployRecord[],
   record: DeployRecord,
 ): void {
-  const next = [
+  const deduped = [
     ...records.filter((existing) => existing.idempotencyKey !== record.idempotencyKey
       || existing.status === 'failed'),
     record,
-  ].slice(-100);
-  saveDeployState(commonDir, config, { records: next });
+  ];
+  saveDeployState(commonDir, config, { records: capDeployHistory(deduped) });
+}
+
+// v1.1 R10 fix: the simple `.slice(-100)` tail-cap used to silently
+// evict the last-known-good DeployRecord on a long-lived repo, which
+// breaks /rollback (findLastGoodDeploy sees an empty post-slice
+// window). Preserve the most recent succeeded + verified record for
+// every (environment, surfaces-key) as a pinned checkpoint beyond the
+// recency cap. Keep the tail-100 window for everything else so state
+// files still stay bounded.
+const DEPLOY_HISTORY_TAIL = 100;
+export function capDeployHistory(records: DeployRecord[]): DeployRecord[] {
+  if (records.length <= DEPLOY_HISTORY_TAIL) return records;
+  const tail = records.slice(-DEPLOY_HISTORY_TAIL);
+  const tailSet = new Set(tail);
+  // Walk the full history and pick the most recent verified checkpoint
+  // per (environment, sorted-surfaces) that isn't already in the tail.
+  const pinned = new Map<string, DeployRecord>();
+  for (const record of records) {
+    if (tailSet.has(record)) continue;
+    if (record.status !== 'succeeded') continue;
+    if (!record.verifiedAt) continue;
+    if (!record.sha) continue;
+    const key = `${record.environment}:${[...(record.surfaces ?? [])].sort().join(',')}`;
+    const prev = pinned.get(key);
+    const prevTime = prev?.verifiedAt ? Date.parse(prev.verifiedAt) : 0;
+    const curTime = Date.parse(record.verifiedAt);
+    if (!prev || (Number.isFinite(curTime) && curTime > prevTime)) {
+      pinned.set(key, record);
+    }
+  }
+  if (pinned.size === 0) return tail;
+  // Preserve the original insertion order across pinned + tail so the
+  // newest-last invariant that findLastGoodDeploy relies on still
+  // holds. Pinned records come first (they're older than the tail).
+  const pinnedOrdered = records.filter((record) => {
+    for (const value of pinned.values()) if (value === record) return true;
+    return false;
+  });
+  return [...pinnedOrdered, ...tail];
 }
 
 export function resolveTriggeredBy(): string {

@@ -4,7 +4,16 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import type { ParsedOperatorArgs } from '../state.ts';
-import { nowIso, resolveWorkflowContext } from '../state.ts';
+import { loadDeployState, nowIso, resolveWorkflowContext } from '../state.ts';
+import {
+  computeDeployConfigFingerprint,
+  emptyDeployConfig,
+  loadDeployConfig,
+  normalizeDeployEnvironment,
+  resolveDeployStateKey,
+  verifyDeployRecord,
+} from '../release-gate.ts';
+import { findLastGoodDeploy } from '../commands/helpers.ts';
 import {
   buildApiEnvelope,
   buildFreshness,
@@ -107,7 +116,7 @@ export function isStableActionId(value: string): value is StableActionId {
 
 export function buildActionPreflightEnvelope(cwd: string, actionId: StableActionId, parsed: ParsedOperatorArgs): ApiEnvelope<ActionPreflightData> {
   const context = resolveWorkflowContext(cwd);
-  const normalizedInputs = normalizeInputs(actionId, parsed);
+  const normalizedInputs = normalizeInputs(actionId, parsed, cwd);
   const risky = API_RISKY_ACTION_IDS.has(actionId);
   const checkedAt = nowIso();
 
@@ -200,7 +209,7 @@ function evaluatePreflightGate(actionId: StableActionId, inputs: Record<string, 
 
 export async function runActionExecute(cwd: string, actionId: StableActionId, parsed: ParsedOperatorArgs, confirmToken: string): Promise<ApiEnvelope<ActionExecutionData | ActionPreflightData>> {
   const context = resolveWorkflowContext(cwd);
-  const normalizedInputs = normalizeInputs(actionId, parsed);
+  const normalizedInputs = normalizeInputs(actionId, parsed, cwd);
   const risky = API_RISKY_ACTION_IDS.has(actionId);
   const checkedAt = nowIso();
 
@@ -265,7 +274,7 @@ export async function runActionExecute(cwd: string, actionId: StableActionId, pa
   });
 }
 
-function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs): Record<string, unknown> {
+function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs, cwd?: string): Record<string, unknown> {
   const { flags } = parsed;
   switch (actionId) {
     case 'new':
@@ -295,9 +304,65 @@ function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs): 
     case 'doctor.probe':
       return {};
     case 'rollback.staging':
-      return { task: flags.task, surfaces: flags.surfaces };
+      return { task: flags.task, surfaces: flags.surfaces, targetSha: resolveRollbackTargetSha(cwd, 'staging', flags.surfaces) };
     case 'rollback.prod':
-      return { task: flags.task, surfaces: flags.surfaces };
+      return { task: flags.task, surfaces: flags.surfaces, targetSha: resolveRollbackTargetSha(cwd, 'prod', flags.surfaces) };
+  }
+}
+
+// v1.1 R7 fix: bind the rollback target sha to the confirm-token
+// fingerprint. Preflight resolves the target against the current deploy
+// state; execute re-resolves. If the state shifted (another deploy
+// succeeded or failed between preflight and execute), the target sha
+// will be different, the fingerprint won't match, and the token
+// consume rejects. This closes the TOCTOU window where a human-
+// approved "roll back to X" could become "roll back to Y" invisibly.
+//
+// Returns undefined (not null) when resolution fails so the resulting
+// fingerprint value is stable across failed-resolution calls. Failed
+// resolution still lets preflight hand out a token, but the subsequent
+// handleRollback invocation will throw a clear error anyway.
+function resolveRollbackTargetSha(
+  cwd: string | undefined,
+  environment: 'staging' | 'prod',
+  surfaceFlags: string[],
+): string | undefined {
+  if (!cwd) return undefined;
+  try {
+    const context = resolveWorkflowContext(cwd);
+    const deployConfig = loadDeployConfig(context.repoRoot) ?? emptyDeployConfig();
+    const deployState = loadDeployState(context.commonDir, context.config);
+    const stateKey = resolveDeployStateKey();
+    const trustedRecords = stateKey
+      ? deployState.records.filter((record) => verifyDeployRecord(record, stateKey))
+      : deployState.records;
+    // Use config.surfaces as the default when flags.surfaces is empty —
+    // mirrors resolveCommandSurfaces's fallback order at the preflight
+    // layer, where no task lock is loaded.
+    const surfaces = surfaceFlags.length > 0 ? [...surfaceFlags].sort() : [...context.config.surfaces].sort();
+    // Current sha = latest record for this (env, surfaces); excludeSha
+    // for target picks skips it.
+    let currentSha = '';
+    const sortedKey = surfaces.join(',');
+    for (let i = trustedRecords.length - 1; i >= 0; i -= 1) {
+      const record = trustedRecords[i];
+      if (record.environment !== environment) continue;
+      if (!record.sha) continue;
+      const recordKey = [...(record.surfaces ?? [])].sort().join(',');
+      if (recordKey !== sortedKey) continue;
+      currentSha = record.sha;
+      break;
+    }
+    const target = findLastGoodDeploy({
+      records: trustedRecords,
+      environment,
+      surfaces,
+      excludeSha: currentSha,
+      configFingerprint: computeDeployConfigFingerprint(deployConfig, environment),
+    });
+    return target?.sha;
+  } catch {
+    return undefined;
   }
 }
 

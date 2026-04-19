@@ -13,6 +13,7 @@ import {
   nowIso,
   printResult,
   resolveWorkflowContext,
+  runCommandCapture,
   runGh,
   runGit,
   type DeployRecord,
@@ -80,28 +81,43 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
     ].join('\n'));
   }
 
+  // Short-circuit when the environment is already at the result of a
+  // prior rollback. Without this guard, re-running /rollback cascades
+  // BACKWARD: findLastGoodDeploy walks past the successful rollback
+  // record (status=succeeded, excluded by sha) and picks the NEXT-older
+  // good sha, dispatching a rollback to a still-earlier revision on
+  // every repeated invocation.
+  if (currentRecord.status === 'succeeded' && currentRecord.rollbackOfSha) {
+    throw new Error([
+      `rollback ${environment} is a no-op: ${environment} is already at the result of a prior rollback`,
+      `(${currentRecord.sha.slice(0, 7)} rolled back from ${currentRecord.rollbackOfSha.slice(0, 7)}).`,
+      'If you want to roll back further, pass --sha <olderSha> via a fresh deploy or use --revert-pr.',
+    ].join('\n'));
+  }
+
   const target = findLastGoodDeploy({
     records: trustedRecords,
     environment,
     surfaces,
     excludeSha: currentRecord.sha,
+    configFingerprint: computeDeployConfigFingerprint(deployConfig, environment),
   });
   if (!target) {
     throw new Error([
       `rollback ${environment} blocked: no earlier succeeded+verified deploy exists for surfaces ${surfaces.join(',')}`,
-      `prior to the current sha ${currentRecord.sha.slice(0, 7)}.`,
+      `prior to the current sha ${currentRecord.sha.slice(0, 7)} at the current config fingerprint.`,
+      'Either the deploy history has rolled over (slice -100 window), or every prior deploy used a different config.',
       '`--revert-pr` or a fresh redeploy are the only paths forward.',
     ].join('\n'));
   }
 
-  if (target.sha === currentRecord.sha) {
-    // Belt-and-suspenders: findLastGoodDeploy already excludes the
-    // current sha, but a deliberately-identical idempotency key (same
-    // sha, different timestamp) could theoretically slip through. Abort
-    // rather than dispatch a rollback that's a no-op.
+  // Security: confirm target.sha still exists locally + on origin before
+  // dispatching the gh workflow. A force-pushed-out sha would otherwise
+  // fail unpredictably (or worse, deploy HEAD of the branch instead).
+  if (runGit(context.repoRoot, ['cat-file', '-e', '--end-of-options', target.sha], true) === null) {
     throw new Error([
-      `rollback ${environment} is a no-op: target sha matches current sha ${target.sha.slice(0, 7)}.`,
-      'Nothing earlier to roll back to.',
+      `rollback ${environment} blocked: target sha ${target.sha.slice(0, 7)} no longer exists in the local repo.`,
+      'The commit may have been force-pushed out of history. Fetch origin and retry, or use --revert-pr.',
     ].join('\n'));
   }
 
@@ -296,23 +312,45 @@ async function handleRevertPr(
     throw new Error('--revert-pr is release-mode only. Switch modes with workflow:devmode -- release first.');
   }
 
+  // Refuse to operate against a dirty worktree — we're about to `switch`
+  // branches mid-command, and uncommitted work that gets stranded on an
+  // ephemeral revert branch is a terrible UX. Surface the dirty state
+  // loudly before touching anything.
+  const dirty = runGit(context.repoRoot, ['status', '--porcelain'], true);
+  if (dirty && dirty.trim()) {
+    throw new Error([
+      '--revert-pr blocked: worktree has uncommitted changes.',
+      'Commit or stash them before opening a revert PR — this command switches branches.',
+    ].join('\n'));
+  }
+
   const prRecord = loadPrRecord(context.commonDir, context.config, options.taskSlug);
-  const mergedSha = prRecord?.mergedSha ?? resolveLastMergedShaFromGit(context.repoRoot, context.config.baseBranch);
-  if (!mergedSha) {
+  const rawSha = prRecord?.mergedSha ?? resolveBaseBranchTip(context.repoRoot, context.config.baseBranch);
+  if (!rawSha) {
     throw new Error([
       '--revert-pr blocked: could not resolve a merge commit to revert.',
       'Pass --sha <mergeCommit> explicitly, or ensure pr-state.json has a recorded mergedSha for this task.',
     ].join('\n'));
   }
 
-  const revertShortSha = mergedSha.slice(0, 7);
-  const revertBranch = `${context.config.branchPrefix}revert-${revertShortSha}`;
+  // Security: validate rawSha before anything touches git. Reject shapes
+  // that would let an attacker with fs-write to pr-state.json inject a
+  // flag-like value into `git revert` or make the derived revert branch
+  // name start with `-` (which would then flag-inject into git switch /
+  // git push). git's hex alphabet is [0-9a-f]; require 7-40 chars.
+  if (!/^[0-9a-f]{7,40}$/i.test(rawSha)) {
+    throw new Error([
+      `--revert-pr blocked: "${rawSha}" is not a valid git sha (hex, 7-40 chars).`,
+      'pr-state.json may be tampered; check its contents before retrying.',
+    ].join('\n'));
+  }
 
-  // Refuse to reuse an existing branch — operators re-running /rollback
-  // --revert-pr need deterministic behavior, not a silent append to a
-  // pre-existing revert branch.
-  if (runGit(context.repoRoot, ['rev-parse', '--verify', revertBranch], true)) {
-    throw new Error(`--revert-pr blocked: branch ${revertBranch} already exists. Delete it or pass a different --sha.`);
+  // Normalize via rev-parse --verify so a short sha becomes a full 40
+  // and unknown refs fail closed. --verify rejects any token starting
+  // with `-` as a safety belt.
+  const mergedSha = runGit(context.repoRoot, ['rev-parse', '--verify', `${rawSha}^{commit}`], true);
+  if (!mergedSha) {
+    throw new Error(`--revert-pr blocked: "${rawSha}" does not resolve to a commit in this repo.`);
   }
 
   runGit(context.repoRoot, ['fetch', 'origin', context.config.baseBranch], true);
@@ -322,49 +360,109 @@ async function handleRevertPr(
     throw new Error(`--revert-pr blocked: cannot resolve base branch "${context.config.baseBranch}" locally or on origin.`);
   }
 
-  runGit(context.repoRoot, ['switch', '-c', revertBranch, baseRef]);
-  // --no-edit keeps this non-interactive. --no-commit + follow-up commit
-  // would let us customize the message more thoroughly, but the default
-  // `Revert "<subject>"` message is universally parseable.
-  const revertResult = runGit(context.repoRoot, ['revert', '--no-edit', mergedSha], true);
-  if (revertResult === null) {
-    runGit(context.repoRoot, ['revert', '--abort'], true);
-    runGit(context.repoRoot, ['switch', context.config.baseBranch], true);
-    runGit(context.repoRoot, ['branch', '-D', revertBranch], true);
+  // Security: confirm mergedSha is an ancestor of the base branch.
+  // Otherwise an attacker controlling pr-state.json could point us at
+  // an arbitrary commit on a disjoint history (e.g. a rogue branch).
+  const ancestry = runCommandCapture('git', ['merge-base', '--is-ancestor', mergedSha, baseRef], { cwd: context.repoRoot });
+  if (!ancestry.ok) {
     throw new Error([
-      `--revert-pr blocked: \`git revert ${revertShortSha}\` failed (likely a merge conflict).`,
-      'Resolve manually: check out the branch, run git revert, commit, and open the PR by hand.',
+      `--revert-pr blocked: ${mergedSha.slice(0, 7)} is not an ancestor of ${context.config.baseBranch}.`,
+      'Refusing to revert a commit that is not on the base branch history.',
     ].join('\n'));
   }
 
-  runGit(context.repoRoot, ['push', '-u', 'origin', revertBranch]);
-  const prUrl = runGh(context.repoRoot, [
-    'pr',
-    'create',
-    '--base',
-    context.config.baseBranch,
-    '--head',
-    revertBranch,
-    '--title',
-    `Revert "${revertShortSha}"`,
-    '--body',
-    [
-      `Automated revert of ${mergedSha} created via \`/rollback --revert-pr\`.`,
-      'Review the revert carefully before merging — this undoes the above commit.',
-    ].join('\n\n'),
-  ], true);
+  const revertShortSha = mergedSha.slice(0, 7);
+  const revertBranch = `${context.config.branchPrefix}revert-${revertShortSha}`;
 
-  printResult(parsed.flags, {
-    revertBranch,
-    revertedSha: mergedSha,
-    prUrl: prUrl ?? null,
-    message: [
-      `Revert PR opened for ${revertShortSha}`,
-      `Branch: ${revertBranch}`,
-      prUrl ? `PR: ${prUrl}` : 'PR: (gh pr create did not return a URL — check `gh pr list`)',
-      'No sha was pushed to main. Review + merge the PR to land the revert.',
-    ].join('\n'),
-  });
+  // Refuse to reuse an existing branch — operators re-running /rollback
+  // --revert-pr need deterministic behavior, not a silent append to a
+  // pre-existing revert branch. Check both local and remote.
+  if (runGit(context.repoRoot, ['rev-parse', '--verify', revertBranch], true)) {
+    throw new Error(`--revert-pr blocked: branch ${revertBranch} already exists locally. Delete it or pass a different --sha.`);
+  }
+  if (runGit(context.repoRoot, ['ls-remote', '--exit-code', '--heads', 'origin', revertBranch], true) !== null) {
+    throw new Error([
+      `--revert-pr blocked: branch ${revertBranch} already exists on origin.`,
+      `Delete it (\`git push origin --delete ${revertBranch}\`) before retrying.`,
+    ].join('\n'));
+  }
+
+  // Capture the operator's current ref so we can put them back on it
+  // regardless of success/failure. `symbolic-ref --short HEAD` returns
+  // the branch name when HEAD is a branch; falls back to the detached
+  // sha otherwise. Used in the restore-on-finally block below.
+  const originalRef =
+    runGit(context.repoRoot, ['symbolic-ref', '--short', 'HEAD'], true)
+    ?? runGit(context.repoRoot, ['rev-parse', '--verify', 'HEAD'], true);
+
+  const restoreOriginalRef = () => {
+    if (!originalRef) return;
+    runGit(context.repoRoot, ['switch', originalRef], true);
+  };
+
+  try {
+    runGit(context.repoRoot, ['switch', '-c', revertBranch, baseRef]);
+    const revertResult = runGit(context.repoRoot, ['revert', '--no-edit', mergedSha], true);
+    if (revertResult === null) {
+      runGit(context.repoRoot, ['revert', '--abort'], true);
+      restoreOriginalRef();
+      runGit(context.repoRoot, ['branch', '-D', revertBranch], true);
+      throw new Error([
+        `--revert-pr blocked: \`git revert ${revertShortSha}\` failed (likely a merge conflict).`,
+        'Resolve manually: check out the branch, run git revert, commit, and open the PR by hand.',
+      ].join('\n'));
+    }
+
+    runGit(context.repoRoot, ['push', '-u', 'origin', revertBranch]);
+    const prUrl = runGh(context.repoRoot, [
+      'pr',
+      'create',
+      '--base',
+      context.config.baseBranch,
+      '--head',
+      revertBranch,
+      '--title',
+      `Revert "${revertShortSha}"`,
+      '--body',
+      [
+        `Automated revert of ${mergedSha} created via \`/rollback --revert-pr\`.`,
+        'Review the revert carefully before merging — this undoes the above commit.',
+      ].join('\n\n'),
+    ], true);
+
+    if (prUrl === null) {
+      // gh pr create failed post-push. Clean up the remote + local
+      // branch so retry lands on a clean slate (instead of the
+      // "branch already exists" guard above).
+      runGit(context.repoRoot, ['push', 'origin', '--delete', revertBranch], true);
+      restoreOriginalRef();
+      runGit(context.repoRoot, ['branch', '-D', revertBranch], true);
+      throw new Error([
+        '--revert-pr blocked: `gh pr create` failed after pushing the revert branch.',
+        'Cleaned up the remote + local branches. Re-run the command to retry.',
+      ].join('\n'));
+    }
+
+    restoreOriginalRef();
+    printResult(parsed.flags, {
+      revertBranch,
+      revertedSha: mergedSha,
+      prUrl,
+      message: [
+        `Revert PR opened for ${revertShortSha}`,
+        `Branch: ${revertBranch}`,
+        `PR: ${prUrl}`,
+        'No sha was pushed to main. Review + merge the PR to land the revert.',
+      ].join('\n'),
+    });
+  } catch (error) {
+    // Any unexpected throw past the try-block boundary (e.g. push fails
+    // from runGit which doesn't allowFailure) leaves the worktree on
+    // revertBranch. Restore before rethrowing so the operator lands
+    // back where they started.
+    restoreOriginalRef();
+    throw error;
+  }
 }
 
 function findLatestRecord(options: {
@@ -384,11 +482,12 @@ function findLatestRecord(options: {
   return null;
 }
 
-function resolveLastMergedShaFromGit(repoRoot: string, baseBranch: string): string | null {
-  // Last commit on the base branch that looks like a PR merge commit.
-  // GitHub's squash-merge produces `Merge pull request #N`-style subjects
-  // on the merge commit; we fall back to `HEAD` if nothing matches so the
-  // operator at least gets a deterministic sha to revert.
+// Returns the tip of origin/<baseBranch> (or local <baseBranch> as a
+// fallback). Callers use this when pr-state.json lacks a mergedSha; the
+// tip is a reasonable revert candidate because a normal squash-merge
+// lands on that tip. No merge-commit subject filter — the callers
+// validate shape + ancestry before passing the sha to git revert.
+function resolveBaseBranchTip(repoRoot: string, baseBranch: string): string | null {
   const last = runGit(
     repoRoot,
     ['log', '-n', '1', '--format=%H', `origin/${baseBranch}`],
