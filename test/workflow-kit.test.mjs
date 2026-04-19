@@ -4998,3 +4998,279 @@ test('renderCockpit strips ANSI/control chars from envelope-sourced strings', as
   assert.match(rendered, /codex\/pwned\[Local ✓\]/);
   assert.match(rendered, /breadcrumb\[Local ✓\]/);
 });
+
+test('devmode release --override now requires --reason', () => {
+  // v1.5: silent "manual override" default defeats auditability.
+  // --override with no --reason must be rejected with a clear error
+  // pointing at the --reason flag.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    const result = runCli(['run', 'devmode', 'release', '--override'], repoRoot, {}, true);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Release override requires --reason/);
+    assert.match(result.stderr, /--reason/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('devmode release --override --reason persists reason into lastOverride', async () => {
+  // v1.5: `override` clears on mode=build; `lastOverride` persists so the
+  // audit trail survives mode churn. setBy is populated from GITHUB_ACTOR /
+  // USER / fallback, not hardcoded.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    runCli(['run', 'devmode', 'release', '--override', '--reason', 'shipping hotfix TICKET-42'], repoRoot);
+
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const context = stateMod.resolveWorkflowContext(repoRoot);
+    assert.ok(context.modeState.override, 'override should be set');
+    assert.equal(context.modeState.override.reason, 'shipping hotfix TICKET-42');
+    assert.ok(context.modeState.lastOverride, 'lastOverride should be set');
+    assert.equal(context.modeState.lastOverride.reason, 'shipping hotfix TICKET-42');
+    assert.ok(context.modeState.lastOverride.setBy.length > 0, 'setBy must not be empty');
+
+    // Flip back to build — active override clears, lastOverride stays.
+    runCli(['run', 'devmode', 'build'], repoRoot);
+    const after = stateMod.resolveWorkflowContext(repoRoot);
+    assert.equal(after.modeState.override, null);
+    assert.ok(after.modeState.lastOverride, 'lastOverride must survive mode=build');
+    assert.equal(after.modeState.lastOverride.reason, 'shipping hotfix TICKET-42');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('new soft-warns when >= 3 active tasks exist but never blocks', () => {
+  // v1.5: the WIP warn is a guardrail, not a gate. A user who legitimately
+  // has three tasks in flight gets a visible warning on stderr and /new
+  // still succeeds. Uses real /new invocations so the locks survive the
+  // implicit pruneDeadTaskLocks pass inside /new itself.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+
+    // Three real tasks — each creates a worktree + branch the next /new
+    // will count as active.
+    runCli(['run', 'new', '--task', 'alpha'], repoRoot);
+    runCli(['run', 'new', '--task', 'bravo'], repoRoot);
+    runCli(['run', 'new', '--task', 'charlie'], repoRoot);
+
+    const result = runCli(['run', 'new', '--task', 'delta'], repoRoot);
+    assert.equal(result.status, 0, `expected /new to succeed; got stderr: ${result.stderr}`);
+    assert.match(result.stderr, /tasks in flight/);
+    assert.match(result.stderr, /warning, not a block/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('new does not warn when under the WIP threshold', () => {
+  // Below-threshold path stays quiet. Important: noise above actual signal
+  // defeats the warn — if it fires on every /new, operators learn to ignore it.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    const result = runCli(['run', 'new', '--task', 'only-task'], repoRoot);
+    assert.equal(result.status, 0);
+    assert.ok(!/tasks in flight/.test(result.stderr),
+      `expected no WIP warn; got stderr: ${result.stderr}`);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('renderCockpit surfaces persistent OVERRIDE ACTIVE banner when release gate is bypassed', async () => {
+  // v1.5: override audit trail surfaces in the cockpit header. Must appear
+  // BEFORE attention so a long issues list can't scroll it off the screen.
+  const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'status.ts'));
+  const envelope = {
+    schemaVersion: '2026-04-18',
+    command: 'workflow.api.snapshot',
+    ok: true, message: '', warnings: [], issues: [],
+    data: {
+      boardContext: {
+        mode: 'release', baseBranch: 'main',
+        laneOrder: [],
+        releaseReadiness: {
+          state: 'unknown', reason: '', requestedSurfaces: [], blockedSurfaces: [],
+          effectiveOverride: { reason: 'shipping hotfix TICKET-42', timestamp: '2026-04-18T20:00:00.000Z' },
+          localReady: false, hostedReady: false,
+          freshness: { checkedAt: '', observedAt: '', state: 'fresh' },
+          message: '',
+        },
+        activeTask: null,
+        overallFreshness: { checkedAt: '', observedAt: '', state: 'fresh' },
+      },
+      sourceHealth: [],
+      attention: [],
+      availableActions: [],
+      branches: [],
+    },
+  };
+
+  const rendered = mod.renderCockpit(envelope, { color: false });
+  assert.match(rendered, /OVERRIDE ACTIVE/);
+  assert.match(rendered, /shipping hotfix TICKET-42/);
+  // Banner must precede ATTENTION header so it can't get scrolled off.
+  assert.ok(rendered.indexOf('OVERRIDE ACTIVE') < rendered.indexOf('ATTENTION'));
+});
+
+test('setBy whitelist rejects attacker-controlled ANSI escapes in attribution envs', async () => {
+  // Regression guard: a CI context with attacker-controlled GITHUB_ACTOR
+  // (e.g. pull_request_target) must NOT plant ANSI escapes into
+  // mode-state.json via lastOverride.setBy. The whitelist strips to
+  // [A-Za-z0-9_.-]{1,64} and falls through to the next env.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    runCli(
+      ['run', 'devmode', 'release', '--override', '--reason', 'hotfix'],
+      repoRoot,
+      {
+        PIPELANE_OVERRIDE_SET_BY: '\x1b[31mEVIL\x1b[0m',
+        GITHUB_ACTOR: '',
+        USER: 'benign',
+      },
+    );
+
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const context = stateMod.resolveWorkflowContext(repoRoot);
+    assert.ok(context.modeState.lastOverride);
+    assert.equal(context.modeState.lastOverride.setBy, 'benign',
+      `expected whitelist to reject ANSI and fall through to USER; got "${context.modeState.lastOverride.setBy}"`);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('loadModeState drops a malformed lastOverride entry instead of crashing renderers', async () => {
+  // A corrupt or hand-edited mode-state.json where lastOverride is a
+  // string, array, or missing setBy crashes `/devmode status` via
+  // `last.setBy.length`. loadModeState normalizes on load: require
+  // all three strings non-empty, else drop the field.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    // Materialize the state dir via a normal mode write, then replace
+    // mode-state.json with a corrupt lastOverride shape (simulates
+    // hand-edit / partial write / attacker-planted entry).
+    runCli(['run', 'devmode', 'build'], repoRoot);
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const context = stateMod.resolveWorkflowContext(repoRoot);
+    const modeStateFile = stateMod.modeStatePath(context.commonDir, context.config);
+    writeFileSync(modeStateFile, JSON.stringify({
+      mode: 'build',
+      requestedSurfaces: ['frontend'],
+      override: null,
+      lastOverride: 'definitely not an object',
+      updatedAt: null,
+    }, null, 2), 'utf8');
+
+    const loaded = stateMod.loadModeState(context.commonDir, context.config);
+    assert.equal(loaded.lastOverride, undefined,
+      `malformed lastOverride must be dropped, got ${JSON.stringify(loaded.lastOverride)}`);
+
+    // /devmode status must not crash.
+    const result = runCli(['run', 'devmode'], repoRoot);
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Last override: none recorded/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('renderCockpit shows RELEASE GATE PREVIOUSLY BYPASSED banner when override cleared but lastOverride persists', async () => {
+  // The audit trail must outlive the active-override flag. After
+  // /devmode build, effectiveOverride is null but lastOverride persists
+  // and the cockpit shouts about it (softer yellow banner, still before
+  // ATTENTION so a long issues list can't scroll it away).
+  const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'status.ts'));
+  const envelope = {
+    schemaVersion: '2026-04-18',
+    command: 'workflow.api.snapshot',
+    ok: true, message: '', warnings: [], issues: [],
+    data: {
+      boardContext: {
+        mode: 'build', baseBranch: 'main',
+        laneOrder: [],
+        releaseReadiness: {
+          state: 'unknown', reason: '', requestedSurfaces: [], blockedSurfaces: [],
+          effectiveOverride: null,
+          lastOverride: { reason: 'shipping hotfix TICKET-42', setAt: '2026-04-18T20:00:00.000Z', setBy: 'alice' },
+          localReady: false, hostedReady: false,
+          freshness: { checkedAt: '', observedAt: '', state: 'fresh' },
+          message: '',
+        },
+        activeTask: null,
+        overallFreshness: { checkedAt: '', observedAt: '', state: 'fresh' },
+      },
+      sourceHealth: [],
+      attention: [],
+      availableActions: [],
+      branches: [],
+    },
+  };
+
+  const rendered = mod.renderCockpit(envelope, { color: false });
+  assert.match(rendered, /RELEASE GATE PREVIOUSLY BYPASSED/);
+  assert.match(rendered, /shipping hotfix TICKET-42/);
+  assert.match(rendered, /by alice/);
+  assert.ok(rendered.indexOf('PREVIOUSLY BYPASSED') < rendered.indexOf('ATTENTION'),
+    'previous-bypass banner must appear before ATTENTION header');
+  // Not the red active banner (override is null).
+  assert.ok(!/OVERRIDE ACTIVE/.test(rendered));
+});
+
+test('WIP warn message describes post-save count so operator sees "about to start Nth"', () => {
+  // Regression guard for off-by-one copy: the count is taken BEFORE the
+  // new lock is saved, so a message like "You have 3 tasks in flight"
+  // alone undercounts. The fix is to name the POST-save ordinal
+  // explicitly.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+
+    runCli(['run', 'new', '--task', 'alpha'], repoRoot);
+    runCli(['run', 'new', '--task', 'bravo'], repoRoot);
+    runCli(['run', 'new', '--task', 'charlie'], repoRoot);
+    const result = runCli(['run', 'new', '--task', 'delta'], repoRoot);
+
+    assert.match(result.stderr, /about to start a 4th/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('setBy whitelist allows GitHub bot actors like dependabot[bot]', async () => {
+  // Regression guard: whitelist must round-trip legitimate CI bot actors.
+  // An earlier cut rejected brackets and attributed bot-triggered overrides
+  // to the "pipelane" fallback, burying the real actor. The ESC byte
+  // (\x1b) is what actually weaponizes ANSI injection, and that's blocked
+  // at every render site — brackets alone can't form a CSI sequence.
+  const { repoRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    runCli(
+      ['run', 'devmode', 'release', '--override', '--reason', 'scheduled dep bump'],
+      repoRoot,
+      { GITHUB_ACTOR: 'dependabot[bot]', USER: '' },
+    );
+
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const context = stateMod.resolveWorkflowContext(repoRoot);
+    assert.equal(context.modeState.lastOverride?.setBy, 'dependabot[bot]',
+      `bot actor must survive the whitelist; got "${context.modeState.lastOverride?.setBy}"`);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
