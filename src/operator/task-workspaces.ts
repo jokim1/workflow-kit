@@ -266,6 +266,8 @@ export function pruneDeadTaskLocks(
   const minAgeMs = options.minAgeMs ?? TASK_LOCK_MIN_PRUNE_AGE_MS;
   const now = (options.now ?? (() => Date.now()))();
 
+  const isTargetedScope = options.taskSlug !== undefined;
+
   for (const lock of loadAllTaskLocks(commonDir, config)) {
     if (options.taskSlug && lock.taskSlug !== options.taskSlug) {
       continue;
@@ -282,8 +284,21 @@ export function pruneDeadTaskLocks(
       reasons.push(`saved branch ${lock.branchName} no longer exists`);
     }
 
-    if (reasons.length === 0) {
+    // --all-stale mode (no taskSlug): require the worktree or branch to be
+    // missing before we'll prune. The operator didn't name a lock, so we
+    // need objective evidence the lock is abandoned.
+    //
+    // --task <slug> mode: the operator explicitly named one lock and said
+    // "prune it". Honor that even if the worktree + branch are still
+    // intact — the operator's judgment is the authority at this point.
+    // The lock is pure metadata; removing it does not touch the worktree
+    // or branch, so the blast radius is bounded. (The age floor below
+    // still applies.)
+    if (reasons.length === 0 && !isTargetedScope) {
       continue;
+    }
+    if (reasons.length === 0 && isTargetedScope) {
+      reasons.push('operator scope: --task targeted this lock for removal');
     }
 
     if (minAgeMs > 0) {

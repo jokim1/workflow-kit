@@ -45,11 +45,15 @@ export async function handleClean(cwd: string, parsed: ParsedOperatorArgs): Prom
     if (removed.length === 0) {
       messageLines.push(
         taskFlag
-          ? `No stale task lock pruned for ${targetSlug}.`
+          ? `No task lock matched --task ${targetSlug}.`
           : 'No stale task locks were pruned.',
       );
     } else {
-      messageLines.push('Pruned stale task locks:');
+      // --task can prune a lock whose worktree + branch are still intact
+      // (operator override). --all-stale only prunes locks where the
+      // worktree or branch is missing. Keep the header honest about
+      // which mode ran.
+      messageLines.push(taskFlag ? 'Pruned task locks:' : 'Pruned stale task locks:');
       messageLines.push(
         ...removed.map((entry) => `- ${entry.taskSlug}: ${entry.branchName} @ ${entry.worktreePath}`),
       );

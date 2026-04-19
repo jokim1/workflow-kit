@@ -3771,6 +3771,84 @@ test('clean --apply --task prunes just the named lock', () => {
   }
 });
 
+test('clean --apply --task prunes a lock whose worktree + branch are still intact (operator override)', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const drop = JSON.parse(runCli(['run', 'new', '--task', 'Drop Live', '--json'], repoRoot).stdout);
+
+    // Intentionally DO NOT delete the worktree or branch. --task should
+    // honor the operator's explicit scope even when the lock would
+    // otherwise be considered "active" by --all-stale's rules.
+    const result = runCli(['run', 'clean', '--apply', '--task', 'Drop Live', '--json'], repoRoot, {
+      PIPELANE_CLEAN_MIN_AGE_MS: '0',
+    });
+    const envelope = JSON.parse(result.stdout);
+    assert.deepEqual(envelope.removed, ['drop-live']);
+    assert.match(envelope.message, /Pruned task locks/);
+
+    // Lock file is gone.
+    const dropLockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'drop-live.json');
+    assert.ok(!existsSync(dropLockPath), 'targeted prune did not delete the lock file');
+
+    // Worktree and branch are untouched — prune is metadata-only.
+    assert.ok(existsSync(drop.worktreePath), 'targeted prune must not delete the worktree');
+    const branchStillThere = execFileSync('git', ['rev-parse', '--verify', drop.branch], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    assert.ok(branchStillThere.toString().trim().length > 0, 'targeted prune must not delete the branch');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
+test('clean --apply --all-stale skips locks whose worktree + branch are still intact', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const live = JSON.parse(runCli(['run', 'new', '--task', 'Still Live', '--json'], repoRoot).stdout);
+
+    // Keep worktree + branch. --all-stale must refuse this one.
+    const result = runCli(['run', 'clean', '--apply', '--all-stale', '--json'], repoRoot, {
+      PIPELANE_CLEAN_MIN_AGE_MS: '0',
+    });
+    const envelope = JSON.parse(result.stdout);
+    assert.deepEqual(envelope.removed, []);
+    const liveLockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'still-live.json');
+    assert.ok(existsSync(liveLockPath), '--all-stale should not touch live locks');
+    // Silence the unused-variable warning by referencing `live` — the intent
+    // is to keep `new` running so the lock/worktree/branch are real.
+    assert.ok(live.worktreePath);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
+test('slugifyTaskName preserves task names well beyond the old 32-char cap', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    // 47 chars — would have been truncated to "long-task-name-that-exceeds-the-" under the
+    // old .slice(0, 32) cap, dropping "old-cap" entirely.
+    const longName = 'long task name that exceeds the old cap';
+    const created = JSON.parse(runCli(['run', 'new', '--task', longName, '--json'], repoRoot).stdout);
+    assert.equal(created.taskSlug, 'long-task-name-that-exceeds-the-old-cap');
+    assert.match(created.worktreePath, /long-task-name-that-exceeds-the-old-cap-[0-9a-f]{4}$/);
+
+    const lockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'long-task-name-that-exceeds-the-old-cap.json');
+    assert.ok(existsSync(lockPath), 'lock filename should preserve the full slug');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
 test('clean --apply refuses to prune locks with a missing or unparseable updatedAt', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
