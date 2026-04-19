@@ -13,7 +13,7 @@ import {
   resolveDeployStateKey,
   verifyDeployRecord,
 } from '../release-gate.ts';
-import { findLastGoodDeploy } from '../commands/helpers.ts';
+import { findLastGoodDeploy, inferActiveTaskLock } from '../commands/helpers.ts';
 import {
   buildApiEnvelope,
   buildFreshness,
@@ -304,9 +304,9 @@ function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs, c
     case 'doctor.probe':
       return {};
     case 'rollback.staging':
-      return { task: flags.task, surfaces: flags.surfaces, targetSha: resolveRollbackTargetSha(cwd, 'staging', flags.surfaces) };
+      return { task: flags.task, surfaces: flags.surfaces, targetSha: resolveRollbackTargetSha(cwd, 'staging', flags.surfaces, flags.task) };
     case 'rollback.prod':
-      return { task: flags.task, surfaces: flags.surfaces, targetSha: resolveRollbackTargetSha(cwd, 'prod', flags.surfaces) };
+      return { task: flags.task, surfaces: flags.surfaces, targetSha: resolveRollbackTargetSha(cwd, 'prod', flags.surfaces, flags.task) };
   }
 }
 
@@ -318,6 +318,12 @@ function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs, c
 // consume rejects. This closes the TOCTOU window where a human-
 // approved "roll back to X" could become "roll back to Y" invisibly.
 //
+// The surface fallback chain MUST mirror handleRollback's exactly
+// (flags → lock.surfaces → config.surfaces) or preflight and execute
+// compute different targetSha values on the same repo state. Codex
+// caught an earlier version that used config.surfaces directly when
+// flags were empty, diverging from execute's lock-first fallback.
+//
 // Returns undefined (not null) when resolution fails so the resulting
 // fingerprint value is stable across failed-resolution calls. Failed
 // resolution still lets preflight hand out a token, but the subsequent
@@ -326,6 +332,7 @@ function resolveRollbackTargetSha(
   cwd: string | undefined,
   environment: 'staging' | 'prod',
   surfaceFlags: string[],
+  taskFlag: string,
 ): string | undefined {
   if (!cwd) return undefined;
   try {
@@ -336,10 +343,25 @@ function resolveRollbackTargetSha(
     const trustedRecords = stateKey
       ? deployState.records.filter((record) => verifyDeployRecord(record, stateKey))
       : deployState.records;
-    // Use config.surfaces as the default when flags.surfaces is empty —
-    // mirrors resolveCommandSurfaces's fallback order at the preflight
-    // layer, where no task lock is loaded.
-    const surfaces = surfaceFlags.length > 0 ? [...surfaceFlags].sort() : [...context.config.surfaces].sort();
+    // Mirror handleRollback's surface fallback chain: explicit flags
+    // win, then the active task lock's surfaces (same logic
+    // resolveCommandSurfaces applies), then config.surfaces. Task lock
+    // lookup is best-effort — no lock is a valid preflight state (the
+    // operator may be approving from outside a worktree).
+    let surfaceSource: string[];
+    if (surfaceFlags.length > 0) {
+      surfaceSource = [...surfaceFlags];
+    } else {
+      let lockSurfaces: string[] = [];
+      try {
+        const { lock } = inferActiveTaskLock(context, taskFlag);
+        lockSurfaces = lock.surfaces ?? [];
+      } catch {
+        // No active task lock — fall through to config.surfaces.
+      }
+      surfaceSource = lockSurfaces.length > 0 ? lockSurfaces : [...context.config.surfaces];
+    }
+    const surfaces = [...surfaceSource].sort();
     // Current sha = latest record for this (env, surfaces); excludeSha
     // for target picks skips it.
     let currentSha = '';

@@ -6597,6 +6597,131 @@ test('v1.1 fixup: --revert-pr refuses with a dirty worktree before switching bra
   }
 });
 
+// Codex P1: surface fallback at preflight must mirror handleRollback's
+// execute-time chain (flags → lock.surfaces → config.surfaces). If preflight
+// uses config.surfaces when flags are empty, but execute uses lock.surfaces,
+// they compute different targetSha values and the confirm token signs off
+// on the wrong rollback.
+test('v1.1 codex fixup: rollback.* preflight surface fallback matches execute (task lock wins)', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '200',
+  };
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    // Task lock only covers frontend. Config surfaces = [frontend, edge, sql].
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Narrow', '--surfaces', 'frontend', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Narrow', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+
+    // Seed deploy-state with two prod records — one matching frontend
+    // (the lock's surfaces) and one matching the full config surfaces.
+    // Distinct shas so preflight/execute drift would produce visibly
+    // different targetSha in normalizedInputs.
+    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    mkdirSync(stateDir, { recursive: true });
+    // Need an OLDER good record + NEWER current record for each surface
+    // set so findLastGoodDeploy has something to target (excludeSha skips
+    // the newest match).
+    const okProbe = { statusCode: 200, latencyMs: 10, probes: 2 };
+    writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({ records: [
+      // Older frontend-only good (rollback target if lock-path wins).
+      { environment: 'prod', sha: 'oldfrontendsha', surfaces: ['frontend'],
+        workflowName: 'Deploy Hosted', requestedAt: '2026-04-09T00:00:00Z',
+        status: 'succeeded', verifiedAt: '2026-04-09T00:01:00Z', verification: okProbe },
+      // Older all-surfaces good (rollback target if config-path wins).
+      { environment: 'prod', sha: 'oldallsurfaces', surfaces: ['edge', 'frontend', 'sql'],
+        workflowName: 'Deploy Hosted', requestedAt: '2026-04-09T00:00:00Z',
+        status: 'succeeded', verifiedAt: '2026-04-09T00:01:00Z', verification: okProbe },
+      // Current frontend-only (latest).
+      { environment: 'prod', sha: 'curfrontendsha', surfaces: ['frontend'],
+        workflowName: 'Deploy Hosted', requestedAt: '2026-04-10T00:00:00Z',
+        status: 'succeeded', verifiedAt: '2026-04-10T00:01:00Z', verification: okProbe },
+      // Current all-surfaces (latest).
+      { environment: 'prod', sha: 'curallsurfaces', surfaces: ['edge', 'frontend', 'sql'],
+        workflowName: 'Deploy Hosted', requestedAt: '2026-04-11T00:00:00Z',
+        status: 'succeeded', verifiedAt: '2026-04-11T00:01:00Z', verification: okProbe },
+    ] }, null, 2), 'utf8');
+
+    // Preflight omits --surfaces. With the Codex fix, preflight picks up
+    // the task lock (surfaces=['frontend']) and rolls back the frontend
+    // lane → target is 'oldfrontendsha'. The pre-Codex-fix behavior
+    // would fall to config.surfaces and target 'oldallsurfaces' instead.
+    const preflight = JSON.parse(runCli(
+      ['run', 'api', 'action', 'rollback.prod', '--task', 'Narrow'],
+      created.worktreePath, env,
+    ).stdout);
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.data.preflight.normalizedInputs.targetSha, 'oldfrontendsha');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+// Codex P1: the error message advertises --sha, so the code MUST honor
+// it. Earlier revisions silently ignored parsed.flags.sha and always
+// used prRecord.mergedSha or the base-branch tip.
+test('v1.1 codex fixup: --revert-pr honors --sha when passed explicitly', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '200',
+  };
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Explicit Sha', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'v1\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Explicit Sha', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+    runCli(['run', 'devmode', 'release', '--override', '--reason', 'explicit-sha-test', '--json'], created.worktreePath);
+
+    // Land TWO real commits on origin/main: an "old" one + a newer one.
+    // pr-state.json will point at the newer one (via a synthesized merge);
+    // we'll pass --sha pointing at the older one and assert the revert
+    // targets the older one, not what pr-state claims.
+    writeFileSync(path.join(repoRoot, 'old.txt'), 'old\n', 'utf8');
+    commitAll(repoRoot, 'old change');
+    const olderSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    writeFileSync(path.join(repoRoot, 'newer.txt'), 'newer\n', 'utf8');
+    commitAll(repoRoot, 'newer change');
+    const newerSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
+    prState.records[Object.keys(prState.records)[0]].mergedSha = newerSha;
+    writeFileSync(prStatePath, JSON.stringify(prState, null, 2), 'utf8');
+    execFileSync('git', ['fetch', 'origin', 'main'], { cwd: created.worktreePath, stdio: ['ignore', 'pipe', 'pipe'] });
+
+    // Pass the OLDER sha explicitly via --sha. The revert-pr should
+    // target the older sha, not the newer one from pr-state.json.
+    const result = JSON.parse(runCli(
+      ['run', 'rollback', 'prod', '--revert-pr', '--sha', olderSha, '--json'],
+      created.worktreePath,
+      env,
+    ).stdout);
+    assert.equal(result.revertedSha, olderSha, 'revertedSha must honor --sha, not pr-state.json');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
 test('v1.1 fixup: capDeployHistory preserves the most recent verified record per (env, surfaces)', async () => {
   const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'deploy.ts'));
   const ok = (statusCode) => ({ healthcheckUrl: 'x', statusCode, latencyMs: 10, probes: 2 });

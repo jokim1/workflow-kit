@@ -324,8 +324,17 @@ async function handleRevertPr(
     ].join('\n'));
   }
 
+  // Resolution order: operator-supplied --sha (highest precedence,
+  // covers the "pr-state.json is stale or wrong" incident case) →
+  // recorded mergedSha on the task's PR record → tip of the base
+  // branch (last-resort fallback). The error message below advertises
+  // --sha explicitly, so the code MUST honor it — earlier revisions
+  // silently ignored parsed.flags.sha, which Codex caught as P1.
+  const explicitSha = parsed.flags.sha.trim();
   const prRecord = loadPrRecord(context.commonDir, context.config, options.taskSlug);
-  const rawSha = prRecord?.mergedSha ?? resolveBaseBranchTip(context.repoRoot, context.config.baseBranch);
+  const rawSha = explicitSha
+    || prRecord?.mergedSha
+    || resolveBaseBranchTip(context.repoRoot, context.config.baseBranch);
   if (!rawSha) {
     throw new Error([
       '--revert-pr blocked: could not resolve a merge commit to revert.',
