@@ -1636,6 +1636,7 @@ test('syncDocs.packageScripts: false preserves consumer-customized workflow scri
       'workflow:clean': 'my-wrapper clean',
       'workflow:devmode': 'my-wrapper devmode',
       'workflow:status': 'my-wrapper status',
+      'workflow:doctor': 'my-wrapper doctor',
       // devmode.md tells operators to run `workflow:configure` when release
       // mode is blocked; the consistency check requires consumers opting out
       // of packageScripts to define it themselves.
@@ -2178,7 +2179,10 @@ test('release-check fails closed before local CLAUDE is configured', () => {
 // .ready:true flag. The flag now has no authority — only DeployRecord history
 // matters. These tests prove (a) flipping .ready:true does NOT clear the
 // gate, and (b) a real staging-succeeded record DOES.
-function buildFullDeployConfig(options = {}) {
+function buildFullDeployConfig(_options = {}) {
+  // v1.2: .ready field removed from the DeployConfig shape. The
+  // `legacyReady` option used to emit `.ready: true`; v1.2 drops it
+  // entirely (release readiness is now observed + probe-based).
   return {
     platform: 'fly.io',
     frontend: {
@@ -2192,7 +2196,6 @@ function buildFullDeployConfig(options = {}) {
         url: 'https://staging.example.test',
         deployWorkflow: 'Deploy Hosted',
         healthcheckUrl: 'https://staging.example.test/health',
-        ready: options.legacyReady === true,
       },
     },
     edge: {
@@ -2200,7 +2203,6 @@ function buildFullDeployConfig(options = {}) {
         deployCommand: 'supabase functions deploy --staging',
         verificationCommand: 'supabase functions test',
         healthcheckUrl: 'https://staging.example.test/edge-health',
-        ready: options.legacyReady === true,
       },
       production: {
         deployCommand: 'supabase functions deploy',
@@ -2213,7 +2215,6 @@ function buildFullDeployConfig(options = {}) {
         applyCommand: 'supabase db push --staging',
         verificationCommand: 'supabase db lint',
         healthcheckUrl: 'https://staging.example.test/db-health',
-        ready: options.legacyReady === true,
       },
       production: {
         applyCommand: 'supabase db push',
@@ -2255,7 +2256,7 @@ async function fingerprintForFullConfig(options = {}, environment = 'staging') {
   return mod.computeDeployConfigFingerprint(buildFullDeployConfig(options), environment);
 }
 
-async function writeStagingSucceededRecord(repoRoot, surfaces) {
+async function writeStagingSucceededRecord(repoRoot, surfaces, options = {}) {
   const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
   mkdirSync(stateDir, { recursive: true });
   const fingerprint = await fingerprintForFullConfig();
@@ -2282,6 +2283,34 @@ async function writeStagingSucceededRecord(repoRoot, surfaces) {
     triggeredBy: 'test',
   }];
   writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({ records }, null, 2), 'utf8');
+
+  // v1.2: also seed a fresh healthy probe-state.json for the same surfaces
+  // unless the caller explicitly opts out. Release-gate now checks probe
+  // freshness alongside observed staging success — tests that set up "the
+  // observed gate should pass" implicitly want the probe gate to pass too.
+  if (!options.skipProbeState) {
+    writeHealthyProbeState(repoRoot, surfaces);
+  }
+}
+
+function writeHealthyProbeState(repoRoot, surfaces) {
+  const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+  mkdirSync(stateDir, { recursive: true });
+  const probedAt = new Date().toISOString();
+  const records = surfaces.map((surface) => ({
+    environment: 'staging',
+    surface,
+    url: `https://staging.example.test/${surface}-health`,
+    ok: true,
+    statusCode: 200,
+    latencyMs: 25,
+    probedAt,
+  }));
+  writeFileSync(
+    path.join(stateDir, 'probe-state.json'),
+    JSON.stringify({ records, updatedAt: probedAt }, null, 2),
+    'utf8',
+  );
 }
 
 test('release-check blocks when CLAUDE config is full but no staging deploy record exists', () => {
@@ -2396,6 +2425,7 @@ test('release-check: a later staging failure re-blocks a previously-succeeded su
         },
       ],
     }, null, 2), 'utf8');
+    writeHealthyProbeState(repoRoot, ['frontend', 'edge', 'sql']);
 
     const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
     const output = JSON.parse(result.stdout);
@@ -2443,10 +2473,12 @@ test('release-check rejects staging success records without verifiedAt', () => {
   }
 });
 
-test('parseDeployConfigMarkdown preserves legacy .ready:true for backwards compat', async () => {
-  // Guards against a silent parse regression: the flag is ignored by the
-  // evaluator, but must still round-trip through the schema so old consumer
-  // CLAUDE.md files don't produce undefined-property crashes.
+test('parseDeployConfigMarkdown silently drops legacy .ready:true from pre-v1.2 CLAUDE.md', async () => {
+  // v1.2: the .ready field is gone. Older consumer CLAUDE.md files still
+  // have it in the JSON block; the parser must not crash and must not
+  // surface the field on the returned config. Behavior flipped from
+  // "round-trip" (pre-v1.2) to "strip" (v1.2+) — release readiness is
+  // derived from observed deploys + /doctor --probe now.
   const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'release-gate.ts'));
   const markdown = [
     '## Deploy Configuration',
@@ -2467,9 +2499,9 @@ test('parseDeployConfigMarkdown preserves legacy .ready:true for backwards compa
 
   const parsed = mod.parseDeployConfigMarkdown(markdown);
   assert.ok(parsed, 'markdown parsed');
-  assert.equal(parsed.frontend.staging.ready, true, 'frontend.staging.ready round-trips');
-  assert.equal(parsed.edge.staging.ready, true, 'edge.staging.ready round-trips');
-  assert.equal(parsed.sql.staging.ready, true, 'sql.staging.ready round-trips');
+  assert.ok(!('ready' in parsed.frontend.staging), 'frontend.staging.ready must be stripped');
+  assert.ok(!('ready' in parsed.edge.staging), 'edge.staging.ready must be stripped');
+  assert.ok(!('ready' in parsed.sql.staging), 'sql.staging.ready must be stripped');
 });
 
 test('parseDeployConfigMarkdown handles CRLF-normalized CLAUDE.md', async () => {
@@ -2626,6 +2658,7 @@ test('release-check: an attacker-planted unsigned failed record is invisible whe
     writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({
       records: [goodSigned, plantedFailure],
     }, null, 2), 'utf8');
+    writeHealthyProbeState(repoRoot, ['frontend']);
 
     // With the key set, the unsigned planted failure is filtered out and
     // the real signed success remains authoritative for frontend.
@@ -2673,6 +2706,7 @@ test('release-check accepts HMAC-signed records when PIPELANE_DEPLOY_STATE_KEY i
     const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({ records: [signed] }, null, 2), 'utf8');
+    writeHealthyProbeState(repoRoot, ['frontend', 'edge', 'sql']);
 
     // With the key set, signed record clears the gate.
     const ok = runCli(['run', 'release-check', '--json'], repoRoot, { PIPELANE_DEPLOY_STATE_KEY: key });
@@ -2766,6 +2800,12 @@ test('release-check: legacy aggregate verification only credits frontend', async
         idempotencyKey: 'legacy-1', triggeredBy: 'test',
       }],
     }, null, 2), 'utf8');
+    // Probe state seeded for all three surfaces — probe gate is orthogonal
+    // to the observed-staging gate. This test asserts the observed gate
+    // rejects legacy aggregate verification for edge/sql; without probe
+    // state those surfaces would double-block and the assertion would
+    // still pass in the same direction but the test loses precision.
+    writeHealthyProbeState(repoRoot, ['frontend', 'edge', 'sql']);
 
     const result = runCli(['run', 'release-check', '--json'], repoRoot, {}, true);
     const output = JSON.parse(result.stdout);
@@ -4328,7 +4368,6 @@ test('configure --json writes a Deploy Configuration block byte-identical to ren
       '--frontend-staging-url=https://staging.example.test',
       '--frontend-staging-workflow=Deploy Hosted',
       '--frontend-staging-healthcheck=https://staging.example.test/health',
-      '--frontend-staging-ready=true',
       '--frontend-production-url=https://app.example.test',
       '--frontend-production-workflow=Deploy Hosted',
       '--frontend-production-auto-deploy-on-main=false',
@@ -4336,14 +4375,12 @@ test('configure --json writes a Deploy Configuration block byte-identical to ren
       '--edge-staging-deploy-command=supabase functions deploy --staging',
       '--edge-staging-verification-command=supabase functions test',
       '--edge-staging-healthcheck=https://staging.example.test/edge-health',
-      '--edge-staging-ready=false',
       '--edge-production-deploy-command=supabase functions deploy',
       '--edge-production-verification-command=supabase functions test',
       '--edge-production-healthcheck=https://app.example.test/edge-health',
       '--sql-staging-apply-command=supabase db push --staging',
       '--sql-staging-verification-command=supabase db lint',
       '--sql-staging-healthcheck=https://staging.example.test/db-health',
-      '--sql-staging-ready=false',
       '--sql-production-apply-command=supabase db push',
       '--sql-production-verification-command=supabase db lint',
       '--sql-production-healthcheck=https://app.example.test/db-health',
@@ -4489,13 +4526,21 @@ test('configure bare boolean flag (`--frontend-staging-ready`) sets true; `=fals
     runCli(['init', '--project', 'Demo App'], repoRoot);
     runCli(['setup'], repoRoot);
 
-    const bareResult = runCli(['configure', '--json', '--frontend-staging-ready'], repoRoot);
-    const bareConfig = JSON.parse(bareResult.stdout);
-    assert.equal(bareConfig.frontend.staging.ready, true, 'bare flag sets true');
+    // v1.2: --frontend-staging-ready / --edge-staging-ready / --sql-staging-ready
+    // were removed. Scripts that still pass them get a hard error pointing
+    // at the replacement path (observed deploys + /doctor --probe) instead
+    // of silently accepting an ignored value.
+    const bareResult = runCli(['configure', '--json', '--frontend-staging-ready'], repoRoot, {}, true);
+    assert.notEqual(bareResult.status, 0);
+    assert.match(bareResult.stderr, /--frontend-staging-ready was removed in v1\.2/);
 
-    const explicitResult = runCli(['configure', '--json', '--frontend-staging-ready=false'], repoRoot);
-    const explicitConfig = JSON.parse(explicitResult.stdout);
-    assert.equal(explicitConfig.frontend.staging.ready, false, '=false explicitly sets false');
+    const explicitResult = runCli(['configure', '--json', '--sql-staging-ready=false'], repoRoot, {}, true);
+    assert.notEqual(explicitResult.status, 0);
+    assert.match(explicitResult.stderr, /--sql-staging-ready was removed in v1\.2/);
+
+    const edgeResult = runCli(['configure', '--json', '--edge-staging-ready=true'], repoRoot, {}, true);
+    assert.notEqual(edgeResult.status, 0);
+    assert.match(edgeResult.stderr, /--edge-staging-ready was removed in v1\.2/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -4547,7 +4592,10 @@ test('configure rejects malformed boolean flag values', () => {
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     runCli(['setup'], repoRoot);
-    const result = runCli(['configure', '--json', '--frontend-staging-ready=yes'], repoRoot, {}, true);
+    // --frontend-production-auto-deploy-on-main is the remaining real
+    // boolean flag after v1.2 dropped the *-staging-ready flags. A
+    // non-boolean value like "yes" must still be rejected.
+    const result = runCli(['configure', '--json', '--frontend-production-auto-deploy-on-main=yes'], repoRoot, {}, true);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /expects true\/false/);
   } finally {
@@ -4706,6 +4754,7 @@ test('setup consistency check requires workflow:configure when opting out of pac
         'workflow:clean': 'x clean',
         'workflow:devmode': 'x devmode',
         'workflow:status': 'x status',
+        'workflow:doctor': 'x doctor',
         // Deliberately missing workflow:configure
       },
     }, null, 2)}\n`, 'utf8');

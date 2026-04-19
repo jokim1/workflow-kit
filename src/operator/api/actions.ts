@@ -29,6 +29,15 @@ export const STABLE_ACTION_IDS = [
   'deploy.prod',
   'clean.plan',
   'clean.apply',
+  // v1.2: doctor.* actions — both non-risky. doctor.diagnose is a pure
+  // read; doctor.probe writes probe-state.json but only stores observed
+  // liveness (never changes runtime behavior outside its own lane).
+  // doctor.fix is interactive and lives behind the CLI today; it's NOT
+  // registered as an API action because it needs TTY prompts — exposing
+  // it over the API would either require a config-shape payload (which
+  // duplicates `pipelane configure`) or a long-lived stdin proxy.
+  'doctor.diagnose',
+  'doctor.probe',
 ] as const;
 
 export type StableActionId = (typeof STABLE_ACTION_IDS)[number];
@@ -53,6 +62,8 @@ const ACTION_LABELS: Record<StableActionId, string> = {
   'deploy.prod': 'Deploy production',
   'clean.plan': 'Plan cleanup',
   'clean.apply': 'Apply cleanup',
+  'doctor.diagnose': 'Diagnose deploy configuration',
+  'doctor.probe': 'Run live healthcheck probe',
 };
 
 export interface ActionPreflightData {
@@ -267,6 +278,10 @@ function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs): 
       return {};
     case 'clean.apply':
       return { task: flags.task, allStale: flags.allStale };
+    case 'doctor.diagnose':
+      return {};
+    case 'doctor.probe':
+      return {};
   }
 }
 
@@ -333,6 +348,12 @@ function buildUnderlyingArgs(actionId: StableActionId, parsed: ParsedOperatorArg
       args.push('clean', '--apply');
       pushOpt('--task', flags.task);
       if (flags.allStale) args.push('--all-stale');
+      break;
+    case 'doctor.diagnose':
+      args.push('doctor');
+      break;
+    case 'doctor.probe':
+      args.push('doctor', 'probe');
       break;
   }
 
