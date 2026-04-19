@@ -392,7 +392,7 @@ export async function handleDeploy(cwd: string, parsed: ParsedOperatorArgs): Pro
   });
 }
 
-function persistRecord(
+export function persistRecord(
   commonDir: string,
   config: WorkflowConfig,
   records: DeployRecord[],
@@ -406,7 +406,7 @@ function persistRecord(
   saveDeployState(commonDir, config, { records: next });
 }
 
-function resolveTriggeredBy(): string {
+export function resolveTriggeredBy(): string {
   return (
     process.env.PIPELANE_DEPLOY_TRIGGERED_BY
     || process.env.GITHUB_ACTOR
@@ -415,7 +415,7 @@ function resolveTriggeredBy(): string {
   );
 }
 
-function findRecentRun(
+export function findRecentRun(
   repoRoot: string,
   workflowName: string,
   sha: string,
@@ -449,7 +449,7 @@ function findRecentRun(
   }
 }
 
-function watchWorkflowRun(
+export function watchWorkflowRun(
   repoRoot: string,
   runId: string | undefined,
 ): { ok: boolean; reason?: string } {
@@ -560,7 +560,7 @@ function promptForProdConfirmPrefix(fullSha: string, expected: string): Promise<
   });
 }
 
-async function probeHealthcheck(url: string): Promise<DeployVerification> {
+export async function probeHealthcheck(url: string): Promise<DeployVerification> {
   if (process.env.PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS) {
     const statusCode = Number(process.env.PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS);
     return {

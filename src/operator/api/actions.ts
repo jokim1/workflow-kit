@@ -38,6 +38,15 @@ export const STABLE_ACTION_IDS = [
   // duplicates `pipelane configure`) or a long-lived stdin proxy.
   'doctor.diagnose',
   'doctor.probe',
+  // v1.1: rollback.* — one-command deploy recovery. Pipelane-only
+  // extension above Rocketboard's shared baseline. rollback.staging is
+  // low-risk (staging is allowed to break); rollback.prod joins the
+  // risky set alongside deploy.prod and requires a confirm-token.
+  // --revert-pr is NOT exposed as an API action — opening a PR from a
+  // long-lived board/CI shell needs branch-rename + conflict handling
+  // that live behind the TTY path today.
+  'rollback.staging',
+  'rollback.prod',
 ] as const;
 
 export type StableActionId = (typeof STABLE_ACTION_IDS)[number];
@@ -48,6 +57,7 @@ export const API_RISKY_ACTION_IDS: ReadonlySet<StableActionId> = new Set<StableA
   'clean.apply',
   'merge',
   'deploy.prod',
+  'rollback.prod',
 ]);
 
 const ACTION_LABELS: Record<StableActionId, string> = {
@@ -64,6 +74,8 @@ const ACTION_LABELS: Record<StableActionId, string> = {
   'clean.apply': 'Apply cleanup',
   'doctor.diagnose': 'Diagnose deploy configuration',
   'doctor.probe': 'Run live healthcheck probe',
+  'rollback.staging': 'Rollback staging to last-good deploy',
+  'rollback.prod': 'Rollback production to last-good deploy',
 };
 
 export interface ActionPreflightData {
@@ -282,6 +294,10 @@ function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs): 
       return {};
     case 'doctor.probe':
       return {};
+    case 'rollback.staging':
+      return { task: flags.task, surfaces: flags.surfaces };
+    case 'rollback.prod':
+      return { task: flags.task, surfaces: flags.surfaces };
   }
 }
 
@@ -355,6 +371,16 @@ function buildUnderlyingArgs(actionId: StableActionId, parsed: ParsedOperatorArg
     case 'doctor.probe':
       args.push('doctor', 'probe');
       break;
+    case 'rollback.staging':
+      args.push('rollback', 'staging');
+      pushOpt('--task', flags.task);
+      pushSurfaces();
+      break;
+    case 'rollback.prod':
+      args.push('rollback', 'prod');
+      pushOpt('--task', flags.task);
+      pushSurfaces();
+      break;
   }
 
   args.push('--json');
@@ -386,10 +412,11 @@ function buildChildEnv(actionId: StableActionId): NodeJS.ProcessEnv {
   for (const key of TEST_HOOK_ENV_KEYS) {
     delete env[key];
   }
-  if (actionId === 'deploy.prod') {
-    // deploy.prod's CLI shim also requires human confirmation. The API path
-    // has already proved humanness via the HMAC confirm-token consume above,
-    // so tell the child CLI it can skip the typed-SHA TTY prompt. The child
+  if (actionId === 'deploy.prod' || actionId === 'rollback.prod') {
+    // Both deploy.prod and rollback.prod's CLI shims require human
+    // confirmation via requireProdConfirmation. The API path has already
+    // proved humanness via the HMAC confirm-token consume above, so tell
+    // the child CLI it can skip the typed-SHA TTY prompt. The child
     // scrubs this flag the moment it reads it so grandchild subprocesses
     // don't inherit an open prod-confirm bit.
     env.PIPELANE_DEPLOY_PROD_API_CONFIRMED = '1';

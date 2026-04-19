@@ -16,6 +16,7 @@ import {
   runGit,
   saveTaskLock,
   slugifyTaskName,
+  type DeployRecord,
   type PrRecord,
   type TaskLock,
 } from '../state.ts';
@@ -458,4 +459,49 @@ export function resolveDeployTargetForTask(options: {
   }
 
   throw new Error(`Could not resolve a deploy target from ${options.baseBranch}.`);
+}
+
+// v1.1: pick the most recent succeeded + verified (2xx) DeployRecord for
+// the given environment + surfaces, excluding any sha matching the
+// caller's `excludeSha` (the failing current deploy we're rolling back
+// from). Matches surfaces by sorted-set equality so a rollback targeting
+// [frontend, edge] cannot pick up a [frontend]-only record.
+//
+// Returns null when no qualifying earlier record exists. Callers treat
+// null as "nothing to roll back to" and abort with a clear error.
+export function findLastGoodDeploy(options: {
+  records: DeployRecord[];
+  environment: 'staging' | 'prod';
+  surfaces: string[];
+  excludeSha: string;
+}): DeployRecord | null {
+  const key = [...options.surfaces].sort().join(',');
+  // Walk newest-first so we can short-circuit on the first qualifying hit.
+  // A DeployRecord appended later in the array is always newer than one
+  // earlier in the array — persistRecord preserves write order.
+  for (let i = options.records.length - 1; i >= 0; i -= 1) {
+    const record = options.records[i];
+    if (record.environment !== options.environment) continue;
+    if (record.status !== 'succeeded') continue;
+    if (!record.sha) continue;
+    if (record.sha === options.excludeSha) continue;
+    const recordKey = [...(record.surfaces ?? [])].sort().join(',');
+    if (recordKey !== key) continue;
+    // Require verified (2xx) liveness. v1.2 per-surface verification is
+    // preferred; legacy aggregate `verification.statusCode` is accepted
+    // as a fallback so pre-v1.2 records still qualify as rollback targets.
+    const perSurface = record.verificationBySurface;
+    if (perSurface && typeof perSurface === 'object') {
+      const allOk = options.surfaces.every((surface) => {
+        const code = perSurface[surface]?.statusCode;
+        return typeof code === 'number' && code >= 200 && code < 300;
+      });
+      if (!allOk) continue;
+    } else {
+      const code = record.verification?.statusCode;
+      if (typeof code !== 'number' || code < 200 || code >= 300) continue;
+    }
+    return record;
+  }
+  return null;
 }

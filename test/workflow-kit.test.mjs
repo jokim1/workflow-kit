@@ -1637,6 +1637,7 @@ test('syncDocs.packageScripts: false preserves consumer-customized workflow scri
       'workflow:devmode': 'my-wrapper devmode',
       'workflow:status': 'my-wrapper status',
       'workflow:doctor': 'my-wrapper doctor',
+      'workflow:rollback': 'my-wrapper rollback',
       // devmode.md tells operators to run `workflow:configure` when release
       // mode is blocked; the consistency check requires consumers opting out
       // of packageScripts to define it themselves.
@@ -6146,5 +6147,284 @@ test('v1.4 /resume --json multi-lock emits activeLocks[] with per-lock lockNextA
     assert.doesNotMatch(payload.message, /Task B.*\n\s+last logged step:/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// v1.1 rollback.* actions
+// ─────────────────────────────────────────────────────────────────────
+
+test('v1.1 findLastGoodDeploy picks the most recent succeeded+verified record excluding the current sha', async () => {
+  const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'helpers.ts'));
+  const ok = (statusCode) => ({ healthcheckUrl: 'x', statusCode, latencyMs: 10, probes: 2 });
+  const records = [
+    { environment: 'prod', sha: 'aaaa', surfaces: ['frontend'], workflowName: 'X',
+      requestedAt: '2026-04-10T00:00:00Z', status: 'succeeded', verifiedAt: '2026-04-10T00:01:00Z',
+      verification: ok(200) },
+    { environment: 'prod', sha: 'bbbb', surfaces: ['frontend'], workflowName: 'X',
+      requestedAt: '2026-04-12T00:00:00Z', status: 'succeeded', verifiedAt: '2026-04-12T00:01:00Z',
+      verification: ok(200) },
+    // Broken prod deploy — we're rolling back FROM this one. Last in the
+    // array, newest timestamp, but findLastGoodDeploy must skip it because
+    // it matches excludeSha.
+    { environment: 'prod', sha: 'cccc', surfaces: ['frontend'], workflowName: 'X',
+      requestedAt: '2026-04-14T00:00:00Z', status: 'failed', verifiedAt: '2026-04-14T00:01:00Z',
+      verification: { statusCode: 503 } },
+    // Different environment + surfaces — don't pick.
+    { environment: 'staging', sha: 'dddd', surfaces: ['frontend'], workflowName: 'X',
+      requestedAt: '2026-04-15T00:00:00Z', status: 'succeeded', verifiedAt: '2026-04-15T00:01:00Z',
+      verification: ok(200) },
+    { environment: 'prod', sha: 'eeee', surfaces: ['frontend', 'edge'], workflowName: 'X',
+      requestedAt: '2026-04-15T00:00:00Z', status: 'succeeded', verifiedAt: '2026-04-15T00:01:00Z',
+      verification: ok(200) },
+  ];
+  const hit = mod.findLastGoodDeploy({
+    records, environment: 'prod', surfaces: ['frontend'], excludeSha: 'cccc',
+  });
+  assert.equal(hit?.sha, 'bbbb');
+  // Per-surface verification path: when verificationBySurface is present,
+  // every requested surface must be 2xx.
+  const withPerSurface = [
+    { environment: 'prod', sha: 'ffff', surfaces: ['frontend', 'edge'], workflowName: 'X',
+      requestedAt: '2026-04-16T00:00:00Z', status: 'succeeded', verifiedAt: '2026-04-16T00:01:00Z',
+      verificationBySurface: { frontend: ok(200), edge: ok(500) } },
+    { environment: 'prod', sha: 'gggg', surfaces: ['frontend', 'edge'], workflowName: 'X',
+      requestedAt: '2026-04-15T00:00:00Z', status: 'succeeded', verifiedAt: '2026-04-15T00:01:00Z',
+      verificationBySurface: { frontend: ok(200), edge: ok(200) } },
+  ];
+  const perSurfaceHit = mod.findLastGoodDeploy({
+    records: withPerSurface, environment: 'prod', surfaces: ['frontend', 'edge'], excludeSha: 'zzzz',
+  });
+  // 'ffff' has edge: 500 → disqualified. 'gggg' is the last-good.
+  assert.equal(perSurfaceHit?.sha, 'gggg');
+
+  // Nothing earlier → null.
+  assert.equal(mod.findLastGoodDeploy({
+    records: [], environment: 'prod', surfaces: ['frontend'], excludeSha: 'x',
+  }), null);
+});
+
+test('v1.1 /rollback staging dispatches + verifies + persists rollbackOfSha', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '200',
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Rollback Me', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'v1.txt'), 'good\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Rollback Me', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+    // First staging deploy = the known-good one to roll back to.
+    const goodDeploy = JSON.parse(runCli(['run', 'deploy', 'staging', '--json'], created.worktreePath, env).stdout);
+    assert.equal(goodDeploy.status, 'succeeded');
+
+    // Simulate a broken follow-up deploy: flip the stub to 503, write a
+    // fresh commit, deploy, verify it fails and lands as the current sha.
+    writeFileSync(path.join(created.worktreePath, 'v2.txt'), 'bad\n', 'utf8');
+    execFileSync('git', ['add', '.'], { cwd: created.worktreePath, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['commit', '-m', 'break it'], { cwd: created.worktreePath, stdio: ['ignore', 'pipe', 'pipe'] });
+    const brokenSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.worktreePath, encoding: 'utf8' }).trim();
+    const badDeploy = runCli(['run', 'deploy', 'staging', '--sha', brokenSha, '--json'], created.worktreePath, {
+      ...env, PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '503',
+    }, true);
+    assert.notEqual(badDeploy.status, 0);
+
+    // /rollback staging should pick the earlier good sha and record a
+    // new succeeded DeployRecord with rollbackOfSha pointing at `brokenSha`.
+    const rollback = JSON.parse(runCli(['run', 'rollback', 'staging', '--json'], created.worktreePath, env).stdout);
+    assert.equal(rollback.status, 'succeeded');
+    assert.equal(rollback.environment, 'staging');
+    assert.equal(rollback.sha, goodDeploy.sha);
+    assert.equal(rollback.rollbackOfSha, brokenSha);
+
+    // nextAction breadcrumb should reflect the rollback.
+    const lockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', created.taskSlug + '.json');
+    const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+    assert.match(lock.nextAction, /staging rolled back/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('v1.1 /rollback refuses with a clear error when no earlier succeeded deploy exists', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '503',
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Fresh Repo', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'v1.txt'), 'v1\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Fresh Repo', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+    // Only deploy ever attempted fails → no prior good record exists.
+    runCli(['run', 'deploy', 'staging', '--json'], created.worktreePath, env, true);
+
+    const refused = runCli(['run', 'rollback', 'staging', '--json'], created.worktreePath, env, true);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /no earlier succeeded\+verified deploy/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('v1.1 rollback.* action registry — rollback.prod risky, rollback.staging not', async () => {
+  const actionsMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'api', 'actions.ts'));
+  assert.ok(actionsMod.STABLE_ACTION_IDS.includes('rollback.prod'));
+  assert.ok(actionsMod.STABLE_ACTION_IDS.includes('rollback.staging'));
+  assert.ok(actionsMod.API_RISKY_ACTION_IDS.has('rollback.prod'));
+  assert.ok(!actionsMod.API_RISKY_ACTION_IDS.has('rollback.staging'));
+});
+
+test('v1.1 api action rollback.prod preflight issues a confirm-token, execute rejects bogus tokens', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '200',
+  };
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Confirm Binding', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Confirm Binding', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+
+    // Preflight: requires no prior deploy state — it's a read-only gate
+    // that returns a confirm token fingerprinted on the normalized inputs.
+    const preflight = JSON.parse(runCli(
+      ['run', 'api', 'action', 'rollback.prod', '--task', 'Confirm Binding', '--surfaces', 'frontend'],
+      created.worktreePath, env,
+    ).stdout);
+    assert.equal(preflight.ok, true);
+    assert.equal(preflight.data.action.risky, true);
+    assert.equal(preflight.data.preflight.requiresConfirmation, true);
+    const token = preflight.data.preflight.confirmation.token;
+    assert.ok(token, 'preflight should return a confirm token for rollback.prod');
+
+    // Execute with a bogus token must be rejected by consumeActionConfirmation.
+    const bogus = runCli(
+      ['run', 'api', 'action', 'rollback.prod', '--execute', '--confirm-token', 'fake',
+        '--task', 'Confirm Binding', '--surfaces', 'frontend'],
+      created.worktreePath, env, true,
+    );
+    assert.notEqual(bogus.status, 0);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('v1.1 /rollback --revert-pr opens a gh PR without pushing to main', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '200',
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Revert Me', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'v1\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Revert Me', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+    runCli(['run', 'devmode', 'release', '--override', '--reason', 'revert-pr-test', '--json'], created.worktreePath);
+
+    // The fake gh's squash-merge returns a bogus sha `deadbeefcafebabe`
+    // that isn't a real git object. Simulate the post-merge state by
+    // landing a real commit on origin/main and overwriting pr-state.json
+    // so /revert-pr has something real to revert.
+    writeFileSync(path.join(repoRoot, 'squash.txt'), 'v1\n', 'utf8');
+    commitAll(repoRoot, 'squash: Revert Me');
+    const realMergeSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
+    const key = Object.keys(prState.records)[0];
+    prState.records[key].mergedSha = realMergeSha;
+    writeFileSync(prStatePath, JSON.stringify(prState, null, 2), 'utf8');
+    // Refresh origin in the worktree so origin/main points at realMergeSha.
+    execFileSync('git', ['fetch', 'origin', 'main'], { cwd: created.worktreePath, stdio: ['ignore', 'pipe', 'pipe'] });
+
+    const beforeRemote = execFileSync('git', ['rev-parse', 'main'], { cwd: remoteRoot, encoding: 'utf8' }).trim();
+    const result = JSON.parse(runCli(
+      ['run', 'rollback', 'prod', '--revert-pr', '--json'],
+      created.worktreePath,
+      env,
+    ).stdout);
+    assert.ok(result.revertBranch.startsWith('codex/revert-'));
+    assert.equal(result.revertedSha, realMergeSha);
+    // main on origin must be unchanged — revert-pr opens a PR, never pushes to main.
+    const afterRemote = execFileSync('git', ['rev-parse', 'main'], { cwd: remoteRoot, encoding: 'utf8' }).trim();
+    assert.equal(beforeRemote, afterRemote);
+    const ghState = JSON.parse(readFileSync(ghStateFile, 'utf8'));
+    const revertPr = Object.values(ghState.prs).find((pr) => pr.title.startsWith('Revert "'));
+    assert.ok(revertPr, 'expected a revert PR to be created via fake gh');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('v1.1 --revert-pr refuses outside release mode', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '200',
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Build Mode', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Build Mode', '--json'], created.worktreePath, env);
+    runCli(['run', 'merge', '--json'], created.worktreePath, env);
+    // Stay in build mode (default).
+    const refused = runCli(['run', 'rollback', 'prod', '--revert-pr', '--json'], created.worktreePath, env, true);
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /release-mode only/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
   }
 });
