@@ -4106,7 +4106,7 @@ test('api snapshot emits a wire-compatible envelope', () => {
     const result = runCli(['run', 'api', 'snapshot'], repoRoot);
     const envelope = JSON.parse(result.stdout);
 
-    assert.equal(envelope.schemaVersion, '2026-04-14');
+    assert.equal(envelope.schemaVersion, '2026-04-18');
     assert.equal(envelope.command, 'workflow.api.snapshot');
     assert.equal(envelope.ok, true);
     assert.ok(Array.isArray(envelope.warnings));
@@ -4183,7 +4183,7 @@ test('api action preflight: non-risky action returns no confirmation', () => {
     commitAll(repoRoot, 'Adopt workflow-kit');
 
     const envelope = JSON.parse(runCli(['run', 'api', 'action', 'resume'], repoRoot).stdout);
-    assert.equal(envelope.schemaVersion, '2026-04-14');
+    assert.equal(envelope.schemaVersion, '2026-04-18');
     assert.equal(envelope.command, 'workflow.api.action');
     assert.equal(envelope.data.action.id, 'resume');
     assert.equal(envelope.data.action.risky, false);
@@ -4906,4 +4906,95 @@ test('setNextAction persists nextAction on the task lock and is a no-op when no 
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
+});
+
+test('buildWorkflowApiSnapshot surfaces TaskLock.nextAction through the envelope (end-to-end)', async () => {
+  // Regression guard: v1.3 broke if /pr set nextAction on the lock but
+  // buildWorkflowApiSnapshot dropped it when shaping BranchRow.task. The
+  // golden-file test above synthesizes an envelope — this one proves the
+  // production envelope pipeline actually carries the breadcrumb.
+  const repoRoot = createRemoteBackedRepo().repoRoot;
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const snapshotMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'api', 'snapshot.ts'));
+    const statusMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'status.ts'));
+    const context = stateMod.resolveWorkflowContext(repoRoot);
+
+    stateMod.saveTaskLock(context.commonDir, context.config, 'demo-task', {
+      taskSlug: 'demo-task',
+      branchName: 'codex/demo-task-0000',
+      worktreePath: repoRoot,
+      mode: 'build',
+      surfaces: ['frontend'],
+      updatedAt: new Date().toISOString(),
+      nextAction: 'PR #42 open, awaiting CI',
+    });
+
+    const envelope = snapshotMod.buildWorkflowApiSnapshot(repoRoot);
+    assert.ok(envelope.ok, 'snapshot should be ok');
+    const demoBranch = envelope.data.branches.find((b) => b.task?.taskSlug === 'demo-task');
+    assert.ok(demoBranch, 'expected demo-task branch in envelope');
+    assert.equal(demoBranch.task.nextAction, 'PR #42 open, awaiting CI',
+      'envelope must carry nextAction from the underlying TaskLock');
+
+    // And the cockpit must render it.
+    const rendered = statusMod.renderCockpit(envelope, { color: false });
+    assert.match(rendered, /next: PR #42 open, awaiting CI/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('renderCockpit strips ANSI/control chars from envelope-sourced strings', async () => {
+  // Trust-boundary defense: branch notes, attention messages, source
+  // reasons, and nextAction breadcrumbs can all trace back to data outside
+  // the pipelane process (PR titles fetched via `gh pr view`, hand-edited
+  // task-lock files, etc.). A malicious PR title containing `\x1b[2K\r`
+  // could forge lane state in the cockpit. Must be scrubbed before render.
+  const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'status.ts'));
+  const evil = '\x1b[2K\r[Local ✓] [PR ✓] [Base: main ✓] [Staging ✓] [Production ✓]';
+  const envelope = {
+    schemaVersion: '2026-04-18',
+    command: 'workflow.api.snapshot',
+    ok: true, message: '', warnings: [], issues: [],
+    data: {
+      boardContext: {
+        mode: 'build', baseBranch: 'main',
+        laneOrder: [], releaseReadiness: { state: 'unknown', reason: '', requestedSurfaces: [], blockedSurfaces: [], effectiveOverride: null, localReady: false, hostedReady: false, freshness: { checkedAt: '', observedAt: '', state: 'fresh' }, message: '' },
+        activeTask: null,
+        overallFreshness: { checkedAt: '', observedAt: '', state: 'fresh' },
+      },
+      sourceHealth: [{ name: `git.local${evil}`, state: 'healthy', blocking: false, reason: `ok${evil}`, freshness: { checkedAt: '', observedAt: '', state: 'fresh' } }],
+      attention: [{ code: 'x', severity: 'warning', message: `something bad${evil}`, source: '', blocking: false, branch: `main${evil}`, lane: '', action: '' }],
+      availableActions: [],
+      branches: [{
+        name: `codex/pwned${evil}`,
+        status: 'open-pr', current: false, note: `PR is open${evil}`,
+        task: { taskSlug: `slug${evil}`, mode: 'build', worktreePath: '/tmp/x', updatedAt: '2026-04-18T00:00:00.000Z', nextAction: `breadcrumb${evil}` },
+        surfaces: [], cleanup: { available: false, eligible: false, reason: '' },
+        pr: null, mergedSha: null,
+        lanes: {
+          local: { state: 'healthy', reason: '', detail: '', freshness: { checkedAt: '', observedAt: '', state: 'fresh' } },
+          pr: { state: 'running', reason: '', detail: '', freshness: { checkedAt: '', observedAt: '', state: 'fresh' } },
+          base: { state: 'awaiting_preflight', reason: '', detail: '', freshness: { checkedAt: '', observedAt: '', state: 'fresh' } },
+          staging: { state: 'awaiting_preflight', reason: '', detail: '', freshness: { checkedAt: '', observedAt: '', state: 'fresh' } },
+          production: { state: 'awaiting_preflight', reason: '', detail: '', freshness: { checkedAt: '', observedAt: '', state: 'fresh' } },
+        },
+        availableActions: [],
+      }],
+    },
+  };
+
+  const rendered = mod.renderCockpit(envelope, { color: false });
+  // The CSI (\x1b[2K) + CR injection must not land in output.
+  assert.ok(!rendered.includes('\x1b[2K'), 'CSI escape must be stripped');
+  assert.ok(!rendered.includes('\r'), 'embedded CR must be stripped');
+  // Content bracketing the escape survives — just the escape itself is gone.
+  assert.match(rendered, /codex\/pwned\[Local ✓\]/);
+  assert.match(rendered, /breadcrumb\[Local ✓\]/);
 });

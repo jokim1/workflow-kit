@@ -158,7 +158,8 @@ export interface TaskLock {
   updatedAt: string;
   // v1.3: persistent breadcrumb for AI↔AI handoff across sessions. Set by
   // state-mutating commands (/pr, /merge, /deploy) and surfaced by /status
-  // and /resume. Absent on fresh locks until the first mutation writes it.
+  // today; /resume render integration is queued for the next slice. Absent
+  // on fresh locks until the first mutation writes it.
   nextAction?: string;
 }
 

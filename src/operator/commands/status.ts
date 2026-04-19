@@ -38,8 +38,12 @@ export async function handleStatus(cwd: string, parsed: ParsedOperatorArgs): Pro
     return;
   }
 
+  // NO_COLOR spec (https://no-color.org): any non-empty value disables color.
+  // Empty string or unset = color allowed (subject to TTY). `!noColor` matches
+  // both undefined and '', which is exactly what the spec specifies.
+  const noColor = process.env.NO_COLOR;
   const rendered = renderCockpit(envelope, {
-    color: process.stdout.isTTY === true && process.env.NO_COLOR === undefined,
+    color: process.stdout.isTTY === true && !noColor,
   });
   process.stdout.write(rendered.endsWith('\n') ? rendered : `${rendered}\n`);
 }
@@ -124,44 +128,53 @@ function renderAttention(attention: ApiIssue[], color: boolean): string[] {
   }
   for (const issue of attention) {
     const sev = colorize(issue.severity ?? 'warning', color, severityTone(issue.severity));
-    const where = issue.branch ? ` ${issue.branch}` : '';
-    lines.push(`  [${sev}]${where} ${issue.message}`);
+    const where = issue.branch ? ` ${sanitizeForTerminal(issue.branch)}` : '';
+    lines.push(`  [${sev}]${where} ${sanitizeForTerminal(issue.message)}`);
   }
   return lines;
 }
 
 function renderBranch(branch: BranchRow, baseBranch: string, color: boolean): string[] {
   const marker = branch.current ? '▶' : ' ';
-  const taskSlug = branch.task?.taskSlug ?? branch.name;
-  const header = `  ${marker} ${colorize(taskSlug, color, 'bold')}  ${dim(branch.name, color)}`;
+  const taskSlug = sanitizeForTerminal(branch.task?.taskSlug ?? branch.name);
+  const header = `  ${marker} ${colorize(taskSlug, color, 'bold')}  ${dim(sanitizeForTerminal(branch.name), color)}`;
   const laneLine = `    ${colorizeLanes(branch.lanes, baseBranch, color)}`;
   const detail: string[] = [];
   if (branch.note) {
-    detail.push(`    ${dim(branch.note, color)}`);
+    detail.push(`    ${dim(sanitizeForTerminal(branch.note), color)}`);
   }
   const lockNextAction = readNextAction(branch);
   if (lockNextAction) {
-    detail.push(`    next: ${lockNextAction}`);
+    detail.push(`    next: ${sanitizeForTerminal(lockNextAction)}`);
   }
   return [header, laneLine, ...detail];
 }
 
-// The envelope puts TaskLock fields under `branch.task`, but snapshot.ts
-// as of this PR only maps a subset (taskSlug/mode/worktreePath/updatedAt).
-// `nextAction` is read directly from the lock shape as an additional
-// field — callers that consume the envelope JSON (dashboard) will get it
-// from the underlying task-lock file just like status does here.
 function readNextAction(branch: BranchRow): string | null {
-  const task = branch.task as unknown as { nextAction?: string } | null;
-  if (!task) return null;
-  const text = typeof task.nextAction === 'string' ? task.nextAction.trim() : '';
+  const text = branch.task?.nextAction?.trim() ?? '';
   return text || null;
 }
 
 function renderSource(src: SourceHealthEntry, color: boolean): string {
   const glyph = renderStateGlyph(src.state);
   const tinted = colorize(glyph, color, toneForState(src.state));
-  return `${tinted} ${src.name}: ${src.reason}`;
+  return `${tinted} ${sanitizeForTerminal(src.name)}: ${sanitizeForTerminal(src.reason)}`;
+}
+
+// Strip terminal control characters from envelope-sourced strings before
+// embedding in cockpit output. Defends against ANSI injection via fields
+// that ultimately trace back to outside-the-process inputs — PR titles
+// fetched via `gh pr view`, task-lock files that could be hand-edited,
+// and any free-form string the envelope surfaces. The cockpit's own
+// color/bold escapes are added AFTER sanitization, so style for
+// rendering stays intact. Matches CSI/OSC sequences plus all C0 control
+// chars except tab (\x09) and LF (\x0A), DEL (\x7F), and C1 control
+// chars (\x80-\x9F). CR is stripped — embedded \r would return the
+// cursor to column 0 and let an attacker overwrite earlier output.
+function sanitizeForTerminal(raw: string): string {
+  if (!raw) return '';
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x00-\x08\x0B-\x1F\x7F\x80-\x9F]/g, '');
 }
 
 function colorizeLanes(lanes: BranchRow['lanes'], baseBranch: string, color: boolean): string {
@@ -208,18 +221,27 @@ function groupBranches(branches: BranchRow[]): { active: BranchRow[]; recent: Br
     active.push(branch);
   }
 
-  // Current branch first within "active". Rest sorted by slug for stable output.
+  // Current branch first within "active". Rest sorted by slug for stable
+  // output. Force `en` locale on localeCompare so golden-file tests don't
+  // drift across CI locales (tr-TR flips i/I collation, etc.). Ties
+  // break on branch name so readdirSync-order can't leak into the render.
+  const byName = (a: BranchRow, b: BranchRow) => a.name.localeCompare(b.name, 'en');
+  const bySlugThenName = (a: BranchRow, b: BranchRow) => {
+    const slugCompare = (a.task?.taskSlug ?? a.name).localeCompare(b.task?.taskSlug ?? b.name, 'en');
+    return slugCompare !== 0 ? slugCompare : byName(a, b);
+  };
   active.sort((a, b) => {
     if (a.current && !b.current) return -1;
     if (b.current && !a.current) return 1;
-    return (a.task?.taskSlug ?? a.name).localeCompare(b.task?.taskSlug ?? b.name);
+    return bySlugThenName(a, b);
   });
   recent.sort((a, b) => {
     const am = a.pr?.mergedAt ? Date.parse(a.pr.mergedAt) : 0;
     const bm = b.pr?.mergedAt ? Date.parse(b.pr.mergedAt) : 0;
-    return bm - am;
+    if (am !== bm) return bm - am;
+    return byName(a, b);
   });
-  stale.sort((a, b) => (a.task?.taskSlug ?? a.name).localeCompare(b.task?.taskSlug ?? b.name));
+  stale.sort(bySlugThenName);
 
   return { active, recent, stale };
 }
