@@ -3849,6 +3849,42 @@ test('slugifyTaskName preserves task names well beyond the old 32-char cap', () 
   }
 });
 
+test('slugifyTaskName throws with an actionable error when the slug exceeds the max length', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    // 200 chars, all letters — slugifies to 200 chars (well over the 128 cap).
+    // The old behavior silently truncated to 128; the new behavior throws so
+    // the operator can shorten the name instead of getting a mangled lock.
+    const tooLong = 'a'.repeat(200);
+    const failed = runCli(['run', 'new', '--task', tooLong], repoRoot, {}, true);
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, /Task name too long after slugification/);
+    assert.match(failed.stderr, /200 chars, max is 128/);
+    assert.match(failed.stderr, /Shorten the name and retry/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
+test('slugifyTaskName accepts a slug exactly at the max length', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt workflow-kit');
+    // 128 alphanumeric chars — after slugify is exactly 128 chars, the boundary.
+    const rightAtCap = 'a'.repeat(128);
+    const created = JSON.parse(runCli(['run', 'new', '--task', rightAtCap, '--json'], repoRoot).stdout);
+    assert.equal(created.taskSlug.length, 128);
+    assert.equal(created.taskSlug, rightAtCap);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
 test('clean --apply refuses to prune locks with a missing or unparseable updatedAt', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
