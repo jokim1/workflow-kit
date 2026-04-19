@@ -544,7 +544,44 @@ export function probeStatePath(commonDir: string, config: WorkflowConfig): strin
 }
 
 export function loadProbeState(commonDir: string, config: WorkflowConfig): ProbeState {
-  return readJsonFile(probeStatePath(commonDir, config), { records: [] as ProbeRecord[], updatedAt: '' } satisfies ProbeState);
+  const raw = readJsonFile<ProbeState>(probeStatePath(commonDir, config), { records: [] as ProbeRecord[], updatedAt: '' });
+  return normalizeProbeState(raw);
+}
+
+// v1.2: mirror `normalizeModeState` — a malformed probe-state.json (valid
+// JSON but missing `records`, or records with unexpected shape) otherwise
+// crashes every consumer of explainSurfaceProbe with `undefined is not
+// iterable`. Silently coerce the container shape and drop individual
+// records that don't look right. Half-written files from an interrupted
+// save, hand-edits, and future schema evolutions all fail-closed to an
+// empty probe set rather than bricking the release gate.
+function normalizeProbeState(raw: ProbeState): ProbeState {
+  const source = (raw ?? {}) as Partial<ProbeState>;
+  const records = Array.isArray(source.records) ? source.records : [];
+  const updatedAt = typeof source.updatedAt === 'string' ? source.updatedAt : '';
+  const valid: ProbeRecord[] = [];
+  for (const entry of records) {
+    const record = entry as Partial<ProbeRecord> | null;
+    if (!record || typeof record !== 'object') continue;
+    if (record.environment !== 'staging' && record.environment !== 'production') continue;
+    if (typeof record.surface !== 'string' || record.surface.length === 0) continue;
+    if (typeof record.url !== 'string') continue;
+    if (typeof record.ok !== 'boolean') continue;
+    if (typeof record.probedAt !== 'string') continue;
+    const statusCode = typeof record.statusCode === 'number' ? record.statusCode : null;
+    const latencyMs = typeof record.latencyMs === 'number' ? record.latencyMs : null;
+    valid.push({
+      environment: record.environment,
+      surface: record.surface,
+      url: record.url,
+      ok: record.ok,
+      statusCode,
+      latencyMs,
+      error: typeof record.error === 'string' ? record.error : undefined,
+      probedAt: record.probedAt,
+    });
+  }
+  return { records: valid, updatedAt };
 }
 
 export function saveProbeState(commonDir: string, config: WorkflowConfig, value: ProbeState): void {

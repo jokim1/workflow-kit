@@ -5502,6 +5502,53 @@ test('release-check blocks when staging probe is stale (>24h old)', async () => 
   }
 });
 
+test('doctor.listMissingFields reports platform + frontend staging + production gaps on an empty config', async () => {
+  const doctor = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'doctor.ts'));
+  const releaseGate = await import(path.join(KIT_ROOT, 'src', 'operator', 'release-gate.ts'));
+  const missing = doctor.listMissingFields(releaseGate.emptyDeployConfig());
+  assert.ok(missing.includes('platform'), 'platform flagged');
+  assert.ok(missing.some((m) => m.includes('frontend.staging')), 'frontend.staging flagged');
+  assert.ok(missing.some((m) => m.includes('frontend.production')), 'frontend.production flagged');
+
+  const full = buildFullDeployConfig();
+  assert.deepEqual(doctor.listMissingFields(full), [], 'full config reports no gaps');
+});
+
+test('workflow:api snapshot surfaces probeState rollup + deployProbe.* sourceHealth + probe attention', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    await writeStagingSucceededRecord(repoRoot, ['frontend', 'edge', 'sql'], { skipProbeState: true });
+    writeStaleProbeState(repoRoot, ['frontend', 'edge', 'sql']);
+
+    const result = runCli(['run', 'api', 'snapshot'], repoRoot);
+    const envelope = JSON.parse(result.stdout);
+
+    assert.equal(
+      envelope.data.boardContext.releaseReadiness.probeState,
+      'stale',
+      'probeState rollup surfaces staleness',
+    );
+    assert.ok(
+      envelope.data.sourceHealth.some((entry) => entry.name === 'deployProbe.frontend'),
+      'deployProbe.frontend in sourceHealth',
+    );
+    assert.ok(
+      envelope.data.sourceHealth.some((entry) => entry.name === 'deployProbe.edge'),
+      'deployProbe.edge in sourceHealth (healthcheckUrl configured)',
+    );
+    const staleIssue = envelope.data.attention.find(
+      (issue) => issue.code === 'probe.stale' && issue.action === 'doctor.probe',
+    );
+    assert.ok(staleIssue, 'attention[] carries a probe.stale issue pointing at doctor.probe');
+    assert.equal(staleIssue.lane, 'staging');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('release-check blocks when staging probe is degraded (non-2xx)', async () => {
   const repoRoot = createRepo();
   try {

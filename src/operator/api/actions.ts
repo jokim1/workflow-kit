@@ -370,6 +370,15 @@ const TEST_HOOK_ENV_KEYS = [
   'PIPELANE_CLEAN_MIN_AGE_MS',
   'PIPELANE_CHECKS_SUPABASE_SECRETS_STUB',
   'PIPELANE_CHECKS_GH_SECRETS_STUB',
+  // v1.2: doctor.probe (dispatched via the API) re-reads the deploy config
+  // and runs real fetches. Neither doctor stub should pass through from a
+  // parent board/CI shell. The stubs are also gated on NODE_ENV==='test' at
+  // the CLI; scrubbing here is belt-and-suspenders.
+  // PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS is intentionally NOT scrubbed —
+  // the API→CLI deploy.prod flow relies on it passing through (see
+  // "api action deploy.prod --execute bypasses the TTY prompt via the API env var").
+  'PIPELANE_DOCTOR_PROBE_STUB_STATUS',
+  'PIPELANE_DOCTOR_FIX_STUB',
 ];
 
 function buildChildEnv(actionId: StableActionId): NodeJS.ProcessEnv {

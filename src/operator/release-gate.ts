@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import type { DeployRecord, ProbeRecord, ProbeState, WorkflowConfig } from './state.ts';
+import type { DeployRecord, ProbeEnvironment, ProbeRecord, ProbeState, WorkflowConfig } from './state.ts';
 import { PROBE_STALE_MS } from './state.ts';
 
 // v1.2 env var: opaque HMAC-SHA256 signing key. Accepts any non-empty string;
@@ -419,7 +419,7 @@ export interface ProbeSurfaceFreshness {
 export function explainSurfaceProbe(options: {
   probeState: ProbeState;
   surface: string;
-  environment: ProbeEnvironmentLike;
+  environment: ProbeEnvironment;
   now?: number;
   staleMs?: number;
 }): ProbeSurfaceFreshness {
@@ -449,8 +449,6 @@ export function explainSurfaceProbe(options: {
   }
   return { state: 'healthy', reason: '', probe: match, ageMs };
 }
-
-type ProbeEnvironmentLike = 'staging' | 'production';
 
 export function evaluateReleaseReadiness(options: {
   config: WorkflowConfig;

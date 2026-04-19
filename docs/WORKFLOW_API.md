@@ -17,10 +17,11 @@ accept `--text`. Every response is an `ApiEnvelope` (see below).
 
 ## Envelope shape
 
-```json
+```jsonc
 {
   "schemaVersion": "2026-04-18",
-  "command": "workflow.api.snapshot" | "workflow.api.action",
+  // command is "workflow.api.snapshot" or "workflow.api.action"
+  "command": "workflow.api.snapshot",
   "ok": true,
   "message": "",
   "warnings": [],
@@ -114,17 +115,21 @@ freshness check alongside observed-staging-success: a surface must have a
 successful probe newer than `PROBE_STALE_MS` (24 hours) before the gate
 green-lights production promotion for that surface.
 
-```json
+```jsonc
 {
   "records": [
     {
-      "environment": "staging" | "production",
-      "surface": "frontend" | "edge" | "sql",
+      // "staging" or "production"
+      "environment": "staging",
+      // "frontend", "edge", or "sql"
+      "surface": "frontend",
       "url": "https://staging.example.com/healthz",
       "ok": true,
+      // number on reach, null on network-level failure (DNS, refused, timeout)
       "statusCode": 200,
       "latencyMs": 42,
-      "error": "HTTP 502",            // absent on success
+      // absent on success; populated with "HTTP 5xx" or the network error message on failure
+      "error": "HTTP 502",
       "probedAt": "2026-04-19T18:00:00.000Z"
     }
   ],
@@ -151,11 +156,27 @@ missing-probe messaging handles the "never probed" case directly.
 
 ## Compatibility
 
-- Schema is additive-only within a `schemaVersion`. New fields may appear
-  in any minor bump; readers must ignore unknown fields.
+- Envelope schema is additive-only within a `schemaVersion`. New fields may
+  appear in any minor bump; readers must ignore unknown fields.
 - `STABLE_ACTION_IDS` is append-only. Removing or renaming an ID is a
   breaking change and bumps the schema version.
 - Lane states in `CANONICAL_LANE_STATES` are append-only.
 
+### Deploy Configuration schema (CLAUDE.md)
+
+The `## Deploy Configuration` JSON block in each consumer's local
+`CLAUDE.md` is a separate machine-readable surface. It is versioned
+independently of the envelope schema:
+
+- **v1.2 removal:** `frontend.staging.ready`, `edge.staging.ready`, and
+  `sql.staging.ready` were dropped. Release readiness derives from
+  observed staging deploys + `doctor.probe` freshness now.
+  `parseDeployConfigMarkdown` silently strips `.ready` from older blocks
+  on load; `renderDeployConfigSection` never emits it.
+- **v1.2 CLI flag removals:** `pipelane configure --frontend-staging-ready`,
+  `--edge-staging-ready`, and `--sql-staging-ready` error loudly on
+  invocation. Scripts carrying the flags fail fast; there is no
+  deprecation window.
+
 Source: `src/operator/api/envelope.ts`, `src/operator/api/actions.ts`,
-`src/operator/api/snapshot.ts`.
+`src/operator/api/snapshot.ts`, `src/operator/release-gate.ts`.

@@ -10,20 +10,19 @@ import {
 } from '../release-gate.ts';
 import {
   loadProbeState,
-  nowIso,
   printResult,
   resolveWorkflowContext,
   saveProbeState,
   type ParsedOperatorArgs,
   type ProbeEnvironment,
   type ProbeRecord,
-  type ProbeState,
   type WorkflowContext,
 } from '../state.ts';
 
 // v1.2: /doctor is the guided-config + live-probe command. Three modes:
 // - default (diagnose): read CLAUDE.md, list missing deploy-config fields,
-//   detect platform from package.json / .vercel / fly.toml / etc.
+//   detect platform from well-known config files (fly.toml, vercel.json,
+//   netlify.toml, render.yaml, app.json, .github/workflows/).
 // - `--probe`: hit each configured staging healthcheck URL and record
 //   liveness to probe-state.json. Release-gate reads this.
 // - `--fix`: interactive wizard that prompts for platform + URLs, writes
@@ -202,10 +201,10 @@ export async function executeProbe(context: WorkflowContext, nowFn: () => Date =
   }
 
   const targets = collectProbeTargets(deployConfig);
-  const records: ProbeRecord[] = [];
-  for (const target of targets) {
-    records.push(await probeUrl(target, nowFn));
-  }
+  // probeUrl always resolves (catches its own errors into the record), so
+  // Promise.all can't short-circuit on a single bad target. Parallelizing
+  // cuts end-to-end probe latency from sum-of-targets to max-of-targets.
+  const records = await Promise.all(targets.map((target) => probeUrl(target, nowFn)));
 
   // Merge new records on top of the existing snapshot so a partial
   // re-probe (single surface) doesn't wipe out previously-probed surfaces.
@@ -250,13 +249,31 @@ export function collectProbeTargets(config: DeployConfig): ProbeTarget[] {
   return targets;
 }
 
+// 5s bound keeps /doctor --probe responsive even when a configured
+// staging URL stalls (DNS timeout, TCP hang). Override via
+// PIPELANE_DOCTOR_PROBE_TIMEOUT_MS for slow staging environments.
+// Default matches what a human expects from an "interactive CLI healthcheck."
+const DEFAULT_PROBE_TIMEOUT_MS = 5000;
+
+function resolveProbeTimeoutMs(): number {
+  const raw = process.env.PIPELANE_DOCTOR_PROBE_TIMEOUT_MS;
+  if (!raw) return DEFAULT_PROBE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_PROBE_TIMEOUT_MS;
+}
+
 async function probeUrl(target: ProbeTarget, nowFn: () => Date): Promise<ProbeRecord> {
   const stub = process.env.PIPELANE_DOCTOR_PROBE_STUB_STATUS;
   const probedAt = nowFn().toISOString();
   if (stub) {
     // Test hook mirrors deploy.ts's healthcheck stub. Fixes the status
     // across every target in the same probe invocation so tests can assert
-    // the persisted records without spinning up an HTTP server.
+    // the persisted records without spinning up an HTTP server. Gated on
+    // NODE_ENV==='test' so a stray export in an operator's shell can't
+    // silently fake every probe in a real invocation.
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('PIPELANE_DOCTOR_PROBE_STUB_STATUS is set but NODE_ENV is not "test". Unset it and re-run.');
+    }
     const statusCode = Number(stub);
     const code = Number.isFinite(statusCode) ? statusCode : 599;
     const ok = code >= 200 && code < 300;
@@ -272,9 +289,10 @@ async function probeUrl(target: ProbeTarget, nowFn: () => Date): Promise<ProbeRe
     };
   }
 
+  const timeoutMs = resolveProbeTimeoutMs();
   const started = Date.now();
   try {
-    const response = await fetch(target.url, { method: 'GET' });
+    const response = await fetch(target.url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) });
     const latencyMs = Date.now() - started;
     const ok = response.status >= 200 && response.status < 300;
     return {
@@ -289,7 +307,11 @@ async function probeUrl(target: ProbeTarget, nowFn: () => Date): Promise<ProbeRe
     };
   } catch (error) {
     const latencyMs = Date.now() - started;
-    const message = error instanceof Error ? error.message : String(error);
+    // AbortSignal.timeout raises a DOMException with name "TimeoutError";
+    // normalize it so the record's error is actionable instead of cryptic.
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const isTimeout = error instanceof Error && error.name === 'TimeoutError';
+    const message = isTimeout ? `timeout after ${timeoutMs}ms` : rawMessage;
     return {
       environment: target.environment,
       surface: target.surface,
@@ -411,11 +433,3 @@ function ask(rl: readline.Interface, label: string, current: string): Promise<st
   });
 }
 
-// Re-exported so the `/status` cockpit can compute `probeState` summary
-// without importing `./doctor.ts` (which pulls readline). The wrapper
-// keeps doctor.ts as the single surface for probe logic.
-export { loadProbeState } from '../state.ts';
-
-// Unused re-export kept so TS doesn't complain about the ProbeState import
-// in paths that use only the type.
-export type { ProbeState };
