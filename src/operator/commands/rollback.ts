@@ -16,6 +16,7 @@ import {
   runCommandCapture,
   runGh,
   runGit,
+  slugifyTaskName,
   type DeployRecord,
   type DeployStatus,
   type DeployVerification,
@@ -61,7 +62,13 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
     try {
       taskSlugForRevert = inferActiveTaskLock(context, parsed.flags.task).taskSlug;
     } catch {
-      // No task lock — handleRevertPr falls back to --sha / base branch.
+      // No task lock — if the operator still passed --task, honor it by
+      // slugifying the name directly so handleRevertPr can look up the
+      // matching PR record (Codex r5 P2: post-/clean flow shouldn't
+      // silently ignore the stated task and fall through to base tip).
+      if (parsed.flags.task.trim()) {
+        taskSlugForRevert = slugifyTaskName(parsed.flags.task);
+      }
     }
     await handleRevertPr(cwd, parsed, { taskSlug: taskSlugForRevert });
     return;
@@ -202,7 +209,12 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
     `surfaces=${surfaces.join(',')}`,
   ]);
 
-  const run = findRecentRun(context.repoRoot, workflowName, target.sha, dispatchStart);
+  // strict=true: rollback redeploys a known sha, so any prior
+  // successful run of target.sha is a stale match that would make
+  // watchWorkflowRun attach to the old succeeded run and mark the new
+  // rollback succeeded without waiting for the fresh dispatch.
+  // Require createdAt >= dispatchStart - 5s window.
+  const run = findRecentRun(context.repoRoot, workflowName, target.sha, dispatchStart, { strict: true });
 
   // originalFailingSha already computed above for the idempotency key.
   // Preserve it as the new record's rollbackOfSha — without this, a
@@ -375,8 +387,17 @@ async function handleRevertPr(
   // branch (last-resort fallback). The error message below advertises
   // --sha explicitly, so the code MUST honor it — earlier revisions
   // silently ignored parsed.flags.sha, which Codex caught as P1.
+  //
+  // Refresh origin/<base> BEFORE resolving the tip fallback. A stale
+  // local remote-tracking ref (e.g. operator hasn't fetched in a
+  // while) would otherwise make resolveBaseBranchTip select the wrong
+  // commit, and the later ancestry check still passes — silent
+  // failure. Codex r5 P2.
+  runGit(context.repoRoot, ['fetch', 'origin', context.config.baseBranch], true);
   const explicitSha = parsed.flags.sha.trim();
-  const prRecord = loadPrRecord(context.commonDir, context.config, options.taskSlug);
+  const prRecord = options.taskSlug
+    ? loadPrRecord(context.commonDir, context.config, options.taskSlug)
+    : null;
   const rawSha = explicitSha
     || prRecord?.mergedSha
     || resolveBaseBranchTip(context.repoRoot, context.config.baseBranch);
@@ -407,7 +428,9 @@ async function handleRevertPr(
     throw new Error(`--revert-pr blocked: "${rawSha}" does not resolve to a commit in this repo.`);
   }
 
-  runGit(context.repoRoot, ['fetch', 'origin', context.config.baseBranch], true);
+  // Base ref resolution — the fetch above already refreshed origin,
+  // so origin/<base> is current. Fall back to local <base> if no
+  // remote tracking ref exists (offline-or-fresh-clone scenario).
   const baseRef = runGit(context.repoRoot, ['rev-parse', '--verify', `origin/${context.config.baseBranch}`], true)
     ?? runGit(context.repoRoot, ['rev-parse', '--verify', context.config.baseBranch], true);
   if (!baseRef) {

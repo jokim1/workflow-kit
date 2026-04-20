@@ -459,6 +459,7 @@ export function findRecentRun(
   workflowName: string,
   sha: string,
   dispatchedAfter: number,
+  options: { strict?: boolean } = {},
 ): { id: string; url?: string } | null {
   const output = runCommandCapture('gh', [
     'run',
@@ -478,8 +479,18 @@ export function findRecentRun(
       createdAt: string;
       url?: string;
     }>;
+    // strict=true requires the run to have been created AFTER our
+    // dispatch moment. Rollback always re-dispatches a known sha, so
+    // the default "match on sha OR recency" filter can attach to an
+    // older successful run of the same sha (Codex r5 P1). Deploy keeps
+    // the permissive default because it has the idempotency
+    // short-circuit to prevent same-sha re-dispatch in the first place.
+    const minCreated = dispatchedAfter - 5_000;
     const candidate = runs
-      .filter((run) => run.headSha === sha || Date.parse(run.createdAt) >= dispatchedAfter - 5_000)
+      .filter((run) => {
+        if (options.strict) return Date.parse(run.createdAt) >= minCreated;
+        return run.headSha === sha || Date.parse(run.createdAt) >= minCreated;
+      })
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
     if (!candidate) return null;
     return { id: String(candidate.databaseId), url: candidate.url };
