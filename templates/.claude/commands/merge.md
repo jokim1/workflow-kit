@@ -4,7 +4,7 @@ Merge the current task's pull request.
 Run:
 
 ```bash
-npm run workflow:merge -- $ARGUMENTS
+npm run pipelane:merge -- $ARGUMENTS
 ```
 
 This command:

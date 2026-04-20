@@ -60,7 +60,8 @@ mirrors it.
 | 9.2 | v1.5 WIP soft warn (`/new` at ≥3 active) + `--override --reason` auditability | ✅ merged | pipelane #32 |
 | 9.3 | v1.2 `doctor.*` (diagnose + `--probe` + `--fix` wizard) + probe-state release gate + first `docs/WORKFLOW_API.md` | ✅ merged | pipelane #33 |
 | 9.4 | v1.4 `/status --week / --stuck / --blast` + `surfacePathMap` config + v1.3 `/resume` nextAction fold-in | ✅ merged | pipelane #35 |
-| 9.5 | v1.1 `rollback.*` actions + `--revert-pr` flag + WORKFLOW_COMMANDS `rollback` | 🟡 in PR | pipelane next-2 |
+| 9.5 | v1.1 `rollback.*` actions + `--revert-pr` flag + WORKFLOW_COMMANDS `rollback` | ✅ merged | pipelane #37 (`97c3a26`) |
+| 9.6 | v2.1 package rename surface flip (`pipelane:*` primary in templates/docs, `bin/workflow-kit` slimmed to shim, CLI help flipped) | 🟡 in PR | pipelane next-1 (batch 5) |
 
 Ship items in this exact order. Each is its own PR in Pipelane unless
 noted. Catalog IDs reference the detailed sections below.
@@ -742,9 +743,9 @@ After v1 ships:
 
 ## Phase v2 — Positioning + cuts
 
-### v2.1 — Package-level rename: `workflow-kit` → `pipelane` [in-flight]
+### v2.1 — Package-level rename: `workflow-kit` → `pipelane` [in PR — pipelane next-1, batch 5]
 
-**Status.** In flight as of this PR. Reorder from the original manifest:
+**Status.** Surface flip in PR (templates' primary script names + CLI help + bin shim + root README). Reorder from the original manifest:
 running before v0 correctness work because the cost is higher later
 (more dependents, a published update command referring to the old
 name, consumer-repo packages.json scripts to migrate twice).
@@ -792,6 +793,18 @@ package itself. `pipelane.dev` is already registered for docs / landing.
 **Depends on.** v0 and v1 shipped (don't rename something users are
 still actively trusting for correctness). v0.9 handles all the
 user-visible strings ahead of this; v2.1 is the package/bin flip.
+
+**Deferred to follow-up PRs (called out so they don't get lost):**
+- npm publish workflow for the `workflow-kit` deprecation-shim package
+  (out-of-tree, npm publishing concern).
+- `pipelane.dev` landing page (DNS / hosting concern).
+- `stateDir: 'workflow-kit-state'` → `pipelane-state` rename-on-next-write
+  migration. Per the manifest's "stays workflow-kit-state on disk for one
+  release to avoid re-migrations" guidance. Same logic applies to the
+  `~/.workflow-kit/dashboard/` per-repo dashboard state and
+  `~/.codex/skills/workflow-kit/` codex skill dir — all deferred.
+- `src/operator/codex-install.ts` prose untouched because the file is
+  scheduled for deletion in v2.2.
 
 ---
 

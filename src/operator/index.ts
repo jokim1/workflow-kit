@@ -121,14 +121,16 @@ export async function runOperator(cwd: string, argv: string[]): Promise<void> {
 }
 
 function printUsage(): void {
-  process.stdout.write(`workflow-kit
+  process.stdout.write(`pipelane
 
 Usage:
-  workflow-kit init --project "Project Name"
-  workflow-kit setup
-  workflow-kit run <command> [args...]
-  workflow-kit sync-docs
-  workflow-kit install-codex
+  pipelane init --project "Project Name"
+  pipelane setup
+  pipelane run <command> [args...]
+  pipelane sync-docs
+  pipelane install-codex
+
+  (the legacy \`workflow-kit\` bin still works as a one-release-window shim)
 
 Workflow commands:
   devmode

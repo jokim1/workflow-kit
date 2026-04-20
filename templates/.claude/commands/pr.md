@@ -4,7 +4,7 @@ Prepare and open, or update, a pull request for the current task.
 Run:
 
 ```bash
-npm run workflow:pr -- $ARGUMENTS
+npm run pipelane:pr -- $ARGUMENTS
 ```
 
 This command:

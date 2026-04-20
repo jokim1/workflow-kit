@@ -481,7 +481,7 @@ export function loadWorkflowConfig(repoRoot: string): WorkflowConfig {
   const configPath = resolveConfigPath(repoRoot);
 
   if (!existsSync(configPath)) {
-    throw new Error(`No ${CONFIG_FILENAME} found in ${repoRoot}. Run workflow-kit init first.`);
+    throw new Error(`No ${CONFIG_FILENAME} found in ${repoRoot}. Run pipelane init first.`);
   }
 
   const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Partial<WorkflowConfig>;

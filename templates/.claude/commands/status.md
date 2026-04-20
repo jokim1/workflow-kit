@@ -4,13 +4,13 @@ Render a one-screen terminal cockpit of the workflow:api snapshot.
 Run:
 
 ```bash
-npm run workflow:status
+npm run pipelane:status
 ```
 
 For machine-readable output (same envelope the Pipelane Board consumes):
 
 ```bash
-npm run workflow:status -- --json
+npm run pipelane:status -- --json
 ```
 
 Rules:

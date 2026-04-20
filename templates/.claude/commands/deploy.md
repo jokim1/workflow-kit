@@ -4,7 +4,7 @@ Deploy the merged SHA for this repo.
 Run:
 
 ```bash
-npm run workflow:deploy -- $ARGUMENTS
+npm run pipelane:deploy -- $ARGUMENTS
 ```
 
 Expected arguments:

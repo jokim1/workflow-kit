@@ -1,6 +1,6 @@
 # Dashboard Implementation Guide
 
-This folder contains `workflow-kit`'s local Pipelane Board reference implementation.
+This folder contains `pipelane`'s local Pipelane Board reference implementation.
 
 Files:
 
@@ -9,7 +9,7 @@ Files:
 
 ## Quick start
 
-From the `workflow-kit` repo:
+From the `pipelane` repo:
 
 ```bash
 npm run dashboard -- --repo /absolute/path/to/your/repo

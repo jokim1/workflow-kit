@@ -224,7 +224,7 @@ function assertNoClaudeCollisions(commandsDir: string, desiredFiles: Set<string>
     const targetPath = path.join(commandsDir, entry);
     if (existsSync(targetPath) && !managedFiles.has(entry)) {
       throw new Error(
-        `Claude command alias collision: ${targetPath} already exists and is not managed by workflow-kit. Choose a different alias in .project-workflow.json or rename the conflicting command.`,
+        `Claude command alias collision: ${targetPath} already exists and is not managed by pipelane. Choose a different alias in .project-workflow.json or rename the conflicting command.`,
       );
     }
   }
@@ -560,7 +560,7 @@ export function setupConsumerRepo(cwd: string): {
   const configPath = path.join(repoRoot, CONFIG_FILENAME);
 
   if (!existsSync(configPath)) {
-    throw new Error(`No ${CONFIG_FILENAME} found in ${repoRoot}. Run workflow-kit init first.`);
+    throw new Error(`No ${CONFIG_FILENAME} found in ${repoRoot}. Run pipelane init first.`);
   }
 
   const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as WorkflowConfig;

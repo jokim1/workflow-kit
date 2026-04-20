@@ -4,13 +4,13 @@ Create a fresh task workspace for this repo.
 Run:
 
 ```bash
-npm run workflow:new -- $ARGUMENTS
+npm run pipelane:new -- $ARGUMENTS
 ```
 
 Expected form (with a task label):
 
 ```bash
-npm run workflow:new -- --task "task name"
+npm run pipelane:new -- --task "task name"
 ```
 
 The task label is optional. You can also run `/new` with no arguments and a

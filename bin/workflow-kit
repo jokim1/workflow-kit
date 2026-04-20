@@ -1,11 +1,5 @@
 #!/usr/bin/env node
-// Legacy `workflow-kit` bin — delegates to the same CLI as `pipelane`.
-// See bin/pipelane for the path-resolution rationale.
-import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-const distUrl = new URL('../dist/cli.js', import.meta.url);
-const srcUrl = new URL('../src/cli.ts', import.meta.url);
-const target = existsSync(fileURLToPath(distUrl)) ? distUrl : srcUrl;
-
-await import(target.href);
+// Deprecated alias for `bin/pipelane`. Kept as a thin shim for one release
+// window so existing `npx workflow-kit ...` invocations and consumer
+// package.json bin-name references keep working through the v2.1 rename.
+import './pipelane';

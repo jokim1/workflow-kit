@@ -3,17 +3,17 @@
 Last updated: April 13, 2026
 Status: canonical maintainer workflow for {{DISPLAY_NAME}}
 
-This document is the full operator guide for this repo's workflow-kit setup.
+This document is the full operator guide for this repo's pipelane setup.
 
 ## Who this is for
 
-`{{DISPLAY_NAME}}` uses `workflow-kit` as its repo-specific workflow layer for AI-first
+`{{DISPLAY_NAME}}` uses `pipelane` (formerly `workflow-kit`) as its repo-specific workflow layer for AI-first
 builders and small teams. The goal is a workflow that Claude, Codex, and human operators can
 follow safely without improvising repo behavior.
 
 ## Current Status
 
-`{{DISPLAY_NAME}}` uses `workflow-kit` as its shared release-management and task-workspace layer.
+`{{DISPLAY_NAME}}` uses `pipelane` as its shared release-management and task-workspace layer.
 
 - repo-native scripts are the source of truth
 - slash wrappers are thin adapters only
@@ -25,18 +25,20 @@ follow safely without improvising repo behavior.
 
 ### Repo-native CLI Surface
 
-- `npm run workflow:setup`
-- `npm run workflow:devmode -- ...`
-- `npm run workflow:new -- --task "<task-name>"`
-- `npm run workflow:resume -- --task "<task-name>"`
-- `npm run workflow:pr -- ...`
-- `npm run workflow:merge`
-- `npm run workflow:release-check`
-- `npm run workflow:task-lock -- verify --task "<task-name>"`
-- `npm run workflow:deploy -- staging|prod ...`
-- `npm run workflow:clean`
-- `npm run workflow:status`
-- `npm run workflow:doctor` (add `-- --probe` for staging healthchecks, `-- --fix` for the guided wizard)
+- `npm run pipelane:setup`
+- `npm run pipelane:devmode -- ...`
+- `npm run pipelane:new -- --task "<task-name>"`
+- `npm run pipelane:resume -- --task "<task-name>"`
+- `npm run pipelane:pr -- ...`
+- `npm run pipelane:merge`
+- `npm run pipelane:release-check`
+- `npm run pipelane:task-lock -- verify --task "<task-name>"`
+- `npm run pipelane:deploy -- staging|prod ...`
+- `npm run pipelane:clean`
+- `npm run pipelane:status`
+- `npm run pipelane:doctor` (add `-- --probe` for staging healthchecks, `-- --fix` for the guided wizard)
+
+The legacy `npm run workflow:*` script names remain wired as deprecation aliases for one release window so existing automation keeps working through the rename.
 
 ### AI-client Slash Surface
 
@@ -52,15 +54,15 @@ This repo exposes the following user-facing slash commands through Claude/Codex 
 - `{{ALIAS_STATUS}}`
 - `{{ALIAS_DOCTOR}}`
 
-If aliases change in `.project-workflow.json`, rerun `npm run workflow:setup` and reopen Claude/Codex so the new command names are picked up.
+If aliases change in `.project-workflow.json`, rerun `npm run pipelane:setup` and reopen Claude/Codex so the new command names are picked up.
 Aliases must be unique, and setup fails closed if an alias would overwrite an unrelated command or skill.
-Codex resolves aliases per repo at runtime, so the same alias name can map to different workflow commands in different workflow-kit repos on one machine.
+Codex resolves aliases per repo at runtime, so the same alias name can map to different pipelane commands in different pipelane repos on one machine.
 
-## workflow-kit and gstack
+## pipelane and gstack
 
 Use both.
 
-`workflow-kit` owns the repo-specific workflow contract:
+`pipelane` owns the repo-specific workflow contract:
 
 - `{{ALIAS_DEVMODE}}`
 - `{{ALIAS_NEW}}`
@@ -82,7 +84,7 @@ gstack is still recommended for:
 - investigation and debugging
 - standalone Codex flows
 
-This repo should prefer the workflow-kit release flow over generic gstack `/ship`.
+This repo should prefer the pipelane release flow over generic gstack `/ship`.
 
 ## Task Workspace Flow
 
@@ -127,13 +129,13 @@ Chat has not moved. Switch this chat/workspace to that path before editing.
 Normal use:
 
 ```bash
-npm run workflow:resume -- --task "My Task"
+npm run pipelane:resume -- --task "My Task"
 ```
 
 Fallback listing:
 
 ```bash
-npm run workflow:resume
+npm run pipelane:resume
 ```
 
 ## Build vs Release user journeys
@@ -158,11 +160,11 @@ User-facing journey:
 
 Repo-native journey:
 
-1. `npm run workflow:devmode -- build`
-2. `npm run workflow:new -- --task "<task-name>"`
-3. `npm run workflow:pr -- --title "<pr title>"`
-4. `npm run workflow:merge`
-5. `npm run workflow:clean`
+1. `npm run pipelane:devmode -- build`
+2. `npm run pipelane:new -- --task "<task-name>"`
+3. `npm run pipelane:pr -- --title "<pr title>"`
+4. `npm run pipelane:merge`
+5. `npm run pipelane:clean`
 
 ### Release mode user journey
 
@@ -186,13 +188,13 @@ User-facing journey:
 
 Repo-native journey:
 
-1. `npm run workflow:devmode -- release`
-2. `npm run workflow:new -- --task "<task-name>"`
-3. `npm run workflow:pr -- --title "<pr title>"`
-4. `npm run workflow:merge`
-5. `npm run workflow:deploy -- staging`
-6. `npm run workflow:deploy -- prod`
-7. `npm run workflow:clean`
+1. `npm run pipelane:devmode -- release`
+2. `npm run pipelane:new -- --task "<task-name>"`
+3. `npm run pipelane:pr -- --title "<pr title>"`
+4. `npm run pipelane:merge`
+5. `npm run pipelane:deploy -- staging`
+6. `npm run pipelane:deploy -- prod`
+7. `npm run pipelane:clean`
 
 ## Build Mode
 
@@ -229,7 +231,7 @@ Surfaces:
 
 ## Cleanup
 
-`workflow:clean` is report-first. Use `--apply` only when you want to prune stale task locks.
+`pipelane:clean` is report-first. Use `--apply` only when you want to prune stale task locks.
 
 ## Supporting Files
 
@@ -255,7 +257,7 @@ By default, `pipelane setup` and `pipelane sync-docs` write every surface:
 regenerate `.claude/commands/*.md`, inject marker sections into
 `README.md` / `CONTRIBUTING.md` / `AGENTS.md`, create or refresh
 `docs/RELEASE_WORKFLOW.md` and `workflow/CLAUDE.template.md`, and ensure
-the `workflow:*` / `pipelane:*` scripts in `package.json`.
+the `pipelane:*` (and legacy `workflow:*`) scripts in `package.json`.
 
 Consumers that want partial regeneration can opt out per surface by
 adding a `syncDocs` block. Every flag defaults to `true`; absent or
@@ -283,25 +285,25 @@ adding a `syncDocs` block. Every flag defaults to `true`; absent or
 | `agentsSection` | Marker-wrapped `AGENTS.md` section. |
 | `docsReleaseWorkflow` | `docs/RELEASE_WORKFLOW.md` file write. |
 | `workflowClaudeTemplate` | `workflow/CLAUDE.template.md` file write. |
-| `packageScripts` | `workflow:*` + `pipelane:*` script entries in `package.json`. Setting this to `false` while `claudeCommands` is `true` requires the consumer's `package.json` to already define every `workflow:<cmd>` script (`new`, `resume`, `pr`, `merge`, `deploy`, `clean`, `devmode`). Setup fails fast with guidance if any are missing. |
+| `packageScripts` | `pipelane:*` + legacy `workflow:*` script entries in `package.json`. Setting this to `false` while `claudeCommands` is `true` requires the consumer's `package.json` to already define every `workflow:<cmd>` script (`new`, `resume`, `pr`, `merge`, `deploy`, `clean`, `devmode`). Setup fails fast with guidance if any are missing. |
 
 Opting out never removes content that a previous sync already wrote; it
 just stops future syncs from touching the surface.
 
 ## Required `AGENTS.md`
 
-This repo tracks `AGENTS.md` as the repo policy surface for workflow-kit.
+This repo tracks `AGENTS.md` as the repo policy surface for pipelane.
 
 ## Required local `CLAUDE.md`
 
-`CLAUDE.md` is machine-local and git-ignored. `npm run workflow:setup` creates it if missing.
+`CLAUDE.md` is machine-local and git-ignored. `npm run pipelane:setup` creates it if missing.
 
 ## What each user must do
 
 ### One repo maintainer
 
-1. install `workflow-kit`
-2. run `workflow-kit init`
+1. install `pipelane`
+2. run `pipelane init`
 3. review `.project-workflow.json`, especially `aliases`
 4. commit the tracked workflow files
 
@@ -314,42 +316,42 @@ This repo tracks `AGENTS.md` as the repo policy surface for workflow-kit.
 ### Each Codex user
 
 1. pull the committed workflow files
-2. run `npm run workflow:setup`
+2. run `npm run pipelane:setup`
 3. reopen or restart Codex if the new command names do not appear immediately
 
 Codex wrappers are machine-global, so every Codex user must run setup on their own machine. If aliases change later, rerun setup again.
 
 ### Each release operator
 
-1. run `npm run workflow:setup`
+1. run `npm run pipelane:setup`
 2. fill local deploy config in `CLAUDE.md`
-3. verify with `npm run workflow:release-check`
+3. verify with `npm run pipelane:release-check`
 
 ## Install In A New Repo
 
 ```bash
-npm install -D /Users/josephkim/dev/workflow-kit
-npx workflow-kit init --project "{{DISPLAY_NAME}}"
-npm run workflow:setup
+npm install -D pipelane
+npx pipelane init --project "{{DISPLAY_NAME}}"
+npm run pipelane:setup
 ```
 
 For first-time adoption in an existing remote-backed repo, commit the tracked workflow files
-before using `workflow:new`. New task worktrees are created from `{{BASE_BRANCH}}`, so the
+before using `pipelane:new`. New task worktrees are created from `{{BASE_BRANCH}}`, so the
 workflow contract needs to exist there first.
 
 ## Day-One Operator Journey
 
-1. `npm run workflow:setup`
-2. `npm run workflow:devmode -- status`
-3. `npm run workflow:new -- --task "<task-name>"`
+1. `npm run pipelane:setup`
+2. `npm run pipelane:devmode -- status`
+3. `npm run pipelane:new -- --task "<task-name>"`
 4. implement and verify
-5. `npm run workflow:pr -- --title "<pr title>"`
+5. `npm run pipelane:pr -- --title "<pr title>"`
 
 ## Troubleshooting and Common Failures
 
 - missing `.project-workflow.json`
-  - run `workflow-kit init`
+  - run `pipelane init`
 - task already active
-  - use `workflow:resume -- --task "<task-name>"`
+  - use `pipelane:resume -- --task "<task-name>"`
 - release mode blocked
   - complete local `CLAUDE.md`

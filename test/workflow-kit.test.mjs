@@ -694,7 +694,7 @@ test('custom aliases drive generated Claude commands, docs, and Codex wrappers',
     const readme = readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
     const workflowDoc = readFileSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md'), 'utf8');
     assert.match(readme, /\/branch/);
-    assert.match(readme, /Each Codex user runs `npm run workflow:setup`/);
+    assert.match(readme, /Each Codex user runs `npm run pipelane:setup`/);
     assert.match(workflowDoc, /\/branch/);
     assert.match(workflowDoc, /Codex wrappers are machine-global/);
 
@@ -4464,7 +4464,7 @@ test('api action execute: non-risky action runs without a token', () => {
 test('pipelane help prints subcommand list', () => {
   const result = runCli(['pipelane', '--help'], process.cwd());
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /Usage: workflow-kit pipelane/);
+  assert.match(result.stdout, /Usage: pipelane board/);
   assert.match(result.stdout, /start Pipelane Board/);
   assert.match(result.stdout, /stop the Pipelane Board/);
   assert.match(result.stdout, /--no-open/);
@@ -4627,8 +4627,9 @@ test('setup installs workflow:configure + pipelane:configure scripts and rewrite
     // The devmode slash command previously told operators to run
     // `npm run workflow:setup`, which Rocketboard (and any consumer with
     // `syncDocs.packageScripts: false`) doesn't define. Now it points at the
-    // scoped `workflow:configure` entry that configure.ts wires in.
-    assert.match(devmode, /npm run workflow:configure/);
+    // scoped `pipelane:configure` entry that configure.ts wires in
+    // (the legacy `workflow:configure` script alias is also generated).
+    assert.match(devmode, /npm run pipelane:configure/);
     assert.doesNotMatch(devmode, /run `npm run workflow:setup`/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });

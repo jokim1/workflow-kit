@@ -4,13 +4,13 @@ Resume an existing task workspace for this repo.
 Run:
 
 ```bash
-npm run workflow:resume -- $ARGUMENTS
+npm run pipelane:resume -- $ARGUMENTS
 ```
 
 Common forms:
 
-- `npm run workflow:resume -- --task "task name"`
-- `npm run workflow:resume`
+- `npm run pipelane:resume -- --task "task name"`
+- `npm run pipelane:resume`
 
 Behavior:
 
