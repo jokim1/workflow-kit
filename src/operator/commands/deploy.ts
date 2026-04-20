@@ -228,7 +228,7 @@ export async function dispatchDeploy(
       environment,
       sha: target.sha,
       surfaces,
-      workflowName,
+      workflowName: existingSucceeded.workflowName,
       taskSlug,
       message: [
         `Deploy already succeeded: ${environment}`,
