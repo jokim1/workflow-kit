@@ -77,6 +77,7 @@ npm run pipelane:clean
 - `{{ALIAS_CLEAN}}`
 - `{{ALIAS_STATUS}}`
 - `{{ALIAS_DOCTOR}}`
+- `{{ALIAS_ROLLBACK}}`
 
 Canonical repo-native commands:
 
