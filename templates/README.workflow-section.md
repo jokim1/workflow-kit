@@ -77,6 +77,7 @@ npm run pipelane:clean
 - `{{ALIAS_CLEAN}}`
 - `{{ALIAS_STATUS}}`
 - `{{ALIAS_DOCTOR}}`
+- `{{ALIAS_ROLLBACK}}`
 
 Canonical repo-native commands:
 
@@ -92,6 +93,7 @@ Canonical repo-native commands:
 - `npm run pipelane:clean`
 - `npm run pipelane:status`
 - `npm run pipelane:doctor` (add `-- --probe` for live healthchecks, `-- --fix` for the guided wizard)
+- `npm run pipelane:rollback -- staging|prod` (add `--revert-pr` in release mode to open a `git revert` PR for the failing merge instead of redeploying)
 
 The legacy `workflow:*` script names remain wired as deprecation aliases for one release window.
 

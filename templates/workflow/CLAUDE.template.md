@@ -8,17 +8,18 @@ This file is local-only operator state. Keep it git-ignored.
 - Use `build` only for fallback, recovery, or an explicit user request.
 - Use `{{ALIAS_NEW}}`, not manual branch creation, for normal task starts.
 - Preferred operator path:
-  1. `npm run workflow:devmode -- release`
-  2. `npm run workflow:new -- --task "<task-name>"`
-  3. `npm run workflow:pr -- --title "<pr title>"`
-  4. `npm run workflow:merge`
-  5. `npm run workflow:deploy -- staging`
-  6. `npm run workflow:deploy -- prod`
-  7. `npm run workflow:clean`
-- Use `npm run workflow:resume -- --task "<task-name>"` only when returning to an existing task workspace.
-- Use `npm run workflow:status` (or `{{ALIAS_STATUS}}`) to see the cockpit before acting.
-- Use `npm run workflow:doctor` (or `{{ALIAS_DOCTOR}}`) to diagnose deploy config and probe staging health. Run `npm run workflow:doctor -- --probe` after a staging deploy to refresh the release gate's freshness check.
-- If `.project-workflow.json` aliases change, rerun `npm run workflow:setup` and reopen Claude/Codex so the new command names appear.
+  1. `npm run pipelane:devmode -- release`
+  2. `npm run pipelane:new -- --task "<task-name>"`
+  3. `npm run pipelane:pr -- --title "<pr title>"`
+  4. `npm run pipelane:merge`
+  5. `npm run pipelane:deploy -- staging`
+  6. `npm run pipelane:deploy -- prod`
+  7. `npm run pipelane:clean`
+- Use `npm run pipelane:resume -- --task "<task-name>"` only when returning to an existing task workspace.
+- Use `npm run pipelane:status` (or `{{ALIAS_STATUS}}`) to see the cockpit before acting.
+- Use `npm run pipelane:doctor` (or `{{ALIAS_DOCTOR}}`) to diagnose deploy config and probe staging health. Run `npm run pipelane:doctor -- --probe` after a staging deploy to refresh the release gate's freshness check.
+- If `.project-workflow.json` aliases change, rerun `npm run pipelane:setup` and reopen Claude/Codex so the new command names appear.
+- The legacy `npm run workflow:*` script names remain wired as deprecation aliases for one release window.
 - `{{DEPLOY_WORKFLOW_NAME}}` is the canonical deploy workflow label for this repo.
 
 ## Skill Routing

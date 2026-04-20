@@ -162,7 +162,7 @@ export async function handleDeploy(cwd: string, parsed: ParsedOperatorArgs): Pro
       throw new Error([
         `deploy prod blocked: no succeeded staging deploy found for SHA ${target.sha.slice(0, 7)}`,
         `with surfaces ${surfaces.join(',')} and task ${taskSlug}.`,
-        'Run workflow:deploy -- staging first, wait for it to report status=succeeded.',
+        'Run pipelane:deploy -- staging first, wait for it to report status=succeeded.',
       ].join('\n'));
     }
     // v1.2: tighten the prod gate with the same per-surface + fingerprint +
@@ -178,7 +178,7 @@ export async function handleDeploy(cwd: string, parsed: ParsedOperatorArgs): Pro
     if (disqualification) {
       throw new Error([
         `deploy prod blocked: matching staging record is not promotable — ${disqualification}.`,
-        'Re-run workflow:deploy -- staging and let it verify before promoting.',
+        'Re-run pipelane:deploy -- staging and let it verify before promoting.',
       ].join('\n'));
     }
   }
@@ -376,7 +376,7 @@ export async function handleDeploy(cwd: string, parsed: ParsedOperatorArgs): Pro
   const shortSha = target.sha.slice(0, 7);
   const nextStage = environment === 'staging'
     ? `staging verified at ${shortSha}, deploy to prod`
-    : `prod verified at ${shortSha}, run workflow:clean`;
+    : `prod verified at ${shortSha}, run pipelane:clean`;
   setNextAction(context.commonDir, context.config, taskSlug, nextStage);
 
   printResult(parsed.flags, {
@@ -392,8 +392,8 @@ export async function handleDeploy(cwd: string, parsed: ParsedOperatorArgs): Pro
         ? `Healthcheck: ${verification.healthcheckUrl} → HTTP ${verification.statusCode} in ${verification.latencyMs}ms (${verification.probes} probe(s))`
         : 'Healthcheck: skipped (no URL configured)',
       environment === 'staging'
-        ? 'Next: run workflow:deploy -- prod.'
-        : 'Next: run workflow:clean.',
+        ? 'Next: run pipelane:deploy -- prod.'
+        : 'Next: run pipelane:clean.',
     ].filter(Boolean).join('\n'),
   });
 }

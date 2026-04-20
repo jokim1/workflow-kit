@@ -455,8 +455,9 @@ Pipelane Board dashboard, zero derivation drift.
 - `test/` — snapshot test against a fixture envelope.
 
 **Acceptance criteria.**
-- `npm run workflow:status` renders a single screen; 100% of its data
-  comes from `workflow:api snapshot --json`.
+- `npm run pipelane:status` renders a single screen; 100% of its data
+  comes from `workflow:api snapshot --json` (the API command name stays
+  stable across the v2.1 rename).
 - If the snapshot call fails, `/status` prints the envelope error
   message literally (no silent fallback to raw file reads).
 - The same rendering is reproducible from a fixture JSON, enabling

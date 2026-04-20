@@ -148,11 +148,11 @@ export function renderCockpit(
   const probeState = boardContext.releaseReadiness?.probeState;
   if (probeState === 'degraded') {
     lines.push(colorize('⚠ DEPLOY PROBE DEGRADED', color, 'red'));
-    lines.push('  run `workflow:doctor --probe` to re-probe staging surfaces.');
+    lines.push('  run `pipelane:doctor --probe` to re-probe staging surfaces.');
     lines.push('');
   } else if (probeState === 'stale') {
     lines.push(colorize('ℹ DEPLOY PROBE STALE', color, 'yellow'));
-    lines.push('  last probe is >24h old. Run `workflow:doctor --probe` to refresh.');
+    lines.push('  last probe is >24h old. Run `pipelane:doctor --probe` to refresh.');
     lines.push('');
   }
 

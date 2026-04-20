@@ -81,7 +81,7 @@ export async function handleDevmode(cwd: string, parsed: ParsedOperatorArgs): Pr
     if (parsed.flags.override && !parsed.flags.reason.trim()) {
       throw new Error([
         'Release override requires --reason.',
-        'Example: npm run workflow:devmode -- release --override --reason "shipping hotfix <ticket>"',
+        'Example: npm run pipelane:devmode -- release --override --reason "shipping hotfix <ticket>"',
         'Reasons are persisted to mode-state.json as lastOverride and surfaced by /status.',
       ].join('\n'));
     }

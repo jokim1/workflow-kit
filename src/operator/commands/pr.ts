@@ -41,7 +41,7 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
       surfaces,
     });
     if (!readiness.ready && !context.modeState.override) {
-      throw new Error('Release mode is not ready. Run workflow:release-check first.');
+      throw new Error('Release mode is not ready. Run pipelane:release-check first.');
     }
   }
 
@@ -52,7 +52,7 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
   let prTitle = parsed.flags.title.trim();
 
   if (!existingPr && !prTitle && dirty) {
-    throw new Error('workflow:pr requires --title for a new PR when the worktree is dirty.');
+    throw new Error('pipelane:pr requires --title for a new PR when the worktree is dirty.');
   }
 
   if (!prTitle) {
@@ -144,7 +144,7 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
       `Task: ${taskSlug}`,
       `Branch: ${branchName}`,
       `PR: ${prUrl || 'created'}`,
-      'Next: run workflow:merge.',
+      'Next: run pipelane:merge.',
     ].join('\n'),
   });
 }

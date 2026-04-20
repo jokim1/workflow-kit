@@ -20,7 +20,7 @@ The board is **not**:
 
 - the workflow source of truth
 - a project management board
-- a replacement for repo-native `npm run workflow:*` commands
+- a replacement for repo-native `npm run pipelane:*` commands (or the legacy `npm run workflow:*` aliases)
 - a place to re-infer state from git internals, `gh` output, or private files
 
 ## Design principles

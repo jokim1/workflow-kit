@@ -105,7 +105,7 @@ in one call.
 
 `doctor.fix` is intentionally **not** exposed as an API action — it is
 interactive (TTY prompts for platform + URLs) and lives behind
-`npm run workflow:doctor -- --fix`. Scripted config goes through
+`npm run pipelane:doctor -- --fix`. Scripted config goes through
 `pipelane configure --json=...` instead.
 
 `rollback.*` are **Pipelane-only** extensions above the shared

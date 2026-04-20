@@ -105,7 +105,7 @@ NODE
 )"
 
   if [ -z "$resolved_command" ]; then
-    echo "Alias $alias_name is not configured for this repo. Rerun workflow:setup if aliases changed." >&2
+    echo "Alias $alias_name is not configured for this repo. Rerun pipelane:setup if aliases changed." >&2
     exit 2
   fi
 
@@ -113,7 +113,7 @@ NODE
 fi
 
 cd "$repo_root"
-exec npm run "workflow:$subcommand" -- "$@"
+exec npm run "pipelane:$subcommand" -- "$@"
 `;
 }
 

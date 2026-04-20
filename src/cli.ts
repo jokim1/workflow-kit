@@ -69,7 +69,7 @@ async function main(): Promise<void> {
       result.createdClaude ? 'Created local CLAUDE.md from workflow template.' : 'Preserved existing local CLAUDE.md.',
       `Installed Codex wrappers in ${result.codexHome}`,
       `Slash commands: ${result.installedWrappers.join(', ')}`,
-      'Each Codex user must run npm run workflow:setup on their own machine.',
+      'Each Codex user must run npm run pipelane:setup on their own machine.',
       'If Claude or Codex was already open, reopen the repo or restart the client to refresh slash commands.',
       'Release mode still requires local deploy configuration in CLAUDE.md.',
     ].join('\n') + '\n');

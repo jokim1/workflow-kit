@@ -638,7 +638,7 @@ test('init writes tracked workflow files and setup seeds CLAUDE plus Codex wrapp
 
     const setupResult = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
     assert.match(setupResult.stdout, /[Pp]ipelane setup complete/);
-    assert.match(setupResult.stdout, /Each Codex user must run npm run workflow:setup/);
+    assert.match(setupResult.stdout, /Each Codex user must run npm run pipelane:setup/);
     assert.ok(existsSync(path.join(repoRoot, 'CLAUDE.md')));
     assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
 
@@ -2094,7 +2094,7 @@ test('new creates a fresh task workspace and resume restores it', () => {
     const duplicate = runCli(['run', 'new', '--task', 'Primary Task'], repoRoot, {}, true);
     assert.equal(duplicate.status, 1);
     assert.match(duplicate.stderr, /already active/);
-    assert.match(duplicate.stderr, /workflow:resume/);
+    assert.match(duplicate.stderr, /pipelane:resume/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
@@ -2327,7 +2327,7 @@ test('release-check blocks when CLAUDE config is full but no staging deploy reco
     assert.equal(output.ready, false);
     assert.deepEqual(output.blockedSurfaces.sort(), ['edge', 'frontend', 'sql']);
     assert.match(output.message, /no succeeded deploy observed/);
-    assert.match(output.message, /workflow:deploy -- staging/);
+    assert.match(output.message, /pipelane:deploy -- staging/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -5612,7 +5612,7 @@ test('release-check blocks when staging probe is stale (>24h old)', async () => 
     assert.equal(result.status, 1);
     assert.equal(output.ready, false);
     assert.match(output.message, /probe is stale/);
-    assert.match(output.message, /workflow:doctor --probe/);
+    assert.match(output.message, /pipelane:doctor --probe/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }

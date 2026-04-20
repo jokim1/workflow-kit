@@ -67,7 +67,7 @@ export async function handleNew(cwd: string, parsed: ParsedOperatorArgs): Promis
       `Slug: ${taskSlug}`,
       `Branch: ${existingLock.branchName}`,
       `Worktree: ${existingLock.worktreePath}`,
-      `Next: run workflow:resume -- --task "${taskName}"`,
+      `Next: run pipelane:resume -- --task "${taskName}"`,
     ].join('\n'));
   }
 

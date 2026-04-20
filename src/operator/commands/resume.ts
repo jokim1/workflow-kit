@@ -18,7 +18,7 @@ export async function handleResume(cwd: string, parsed: ParsedOperatorArgs): Pro
     const activeLocks = listActiveTaskLocks(context.commonDir, context.config);
 
     if (activeLocks.length === 0) {
-      throw new Error('No active task locks exist.\nNext: run workflow:new -- --task "<task-name>"');
+      throw new Error('No active task locks exist.\nNext: run pipelane:new -- --task "<task-name>"');
     }
 
     if (activeLocks.length === 1) {
@@ -59,7 +59,7 @@ export async function handleResume(cwd: string, parsed: ParsedOperatorArgs): Pro
         const base = `- ${lock.taskName || lock.taskSlug}: ${lock.branchName} @ ${lock.worktreePath}`;
         return breadcrumb ? `${base}\n  last logged step: ${breadcrumb}` : base;
       }),
-      'Next: run workflow:resume -- --task "<task-name>"',
+      'Next: run pipelane:resume -- --task "<task-name>"',
     ];
     // `activeLocks` gives JSON consumers structured per-lock data
     // (including the v1.4 `lockNextAction` breadcrumb) so the multi-lock
@@ -78,7 +78,7 @@ export async function handleResume(cwd: string, parsed: ParsedOperatorArgs): Pro
     throw new Error([
       prunedTaskLock ? `Removed stale task lock for ${taskName}.` : `No active task lock exists for ${taskName}.`,
       ...(prunedTaskLock ? prunedTaskLock.reasons.map((reason) => `- ${reason}`) : []),
-      `Next: run workflow:new -- --task "${taskName}"`,
+      `Next: run pipelane:new -- --task "${taskName}"`,
     ].join('\n'));
   }
 

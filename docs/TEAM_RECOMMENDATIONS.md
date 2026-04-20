@@ -262,7 +262,7 @@ Replaces the current all-or-nothing release-check experience.
 **Cut the Codex dual-install surface.**
 
 Claude slash commands are already repo-tracked via `.claude/commands/*`. The
-existing repo-native `npm run workflow:*` scripts are the deterministic
+existing repo-native `npm run pipelane:*` scripts (with `npm run workflow:*` retained as deprecation aliases for one release) are the deterministic
 source of truth. Codex slash wrappers as a machine-global install that
 every user must rerun on every machine on every alias change is 30% of the
 product's cognitive overhead and it shows up in five places (README,

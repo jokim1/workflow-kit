@@ -112,11 +112,11 @@ export function buildDiagnoseReport(context: WorkflowContext): DiagnoseReport {
     for (const field of missing) {
       lines.push(`    - ${field}`);
     }
-    lines.push('  Fix: `npm run workflow:doctor -- --fix`');
+    lines.push('  Fix: `npm run pipelane:doctor -- --fix`');
   }
   const freshStaging = probeState.records.filter((r) => r.environment === 'staging');
   if (freshStaging.length === 0) {
-    lines.push('  Probe state: no probes recorded. Run `npm run workflow:doctor -- --probe`.');
+    lines.push('  Probe state: no probes recorded. Run `npm run pipelane:doctor -- --probe`.');
   } else {
     lines.push(`  Probe state: ${freshStaging.length} staging probe(s) recorded.`);
     for (const record of freshStaging) {
@@ -189,7 +189,7 @@ async function runProbe(context: WorkflowContext, parsed: ParsedOperatorArgs): P
   printResult(parsed.flags, outcome);
   // Only staging probes gate release. A flaky production probe is worth
   // recording but shouldn't flip the exit code for scripted callers (e.g.
-  // `npm run workflow:doctor -- --probe` in CI before `workflow:pr`).
+  // `npm run pipelane:doctor -- --probe` in CI before `pipelane:pr`).
   const stagingFailed = outcome.records.some((record) => record.environment === 'staging' && !record.ok);
   if (stagingFailed) {
     process.exitCode = 1;
@@ -201,7 +201,7 @@ export async function executeProbe(context: WorkflowContext, nowFn: () => Date =
   if (!deployConfig) {
     throw new Error([
       'No Deploy Configuration block in CLAUDE.md.',
-      'Run `npm run workflow:doctor -- --fix` to create one.',
+      'Run `npm run pipelane:doctor -- --fix` to create one.',
     ].join('\n'));
   }
 

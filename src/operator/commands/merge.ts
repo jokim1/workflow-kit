@@ -9,7 +9,7 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
   const branchName = runGit(context.repoRoot, ['branch', '--show-current']) ?? '';
   const pr = loadPrForBranch(context.repoRoot, branchName);
   if (!pr) {
-    throw new Error(`No pull request found for branch ${branchName}. Run workflow:pr first.`);
+    throw new Error(`No pull request found for branch ${branchName}. Run pipelane:pr first.`);
   }
 
   watchPrChecks(context.repoRoot, pr.number);
@@ -45,9 +45,9 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
 
   if (context.modeState.mode === 'build') {
     lines.push(`Build mode expects production deploy to happen via ${context.config.deployWorkflowName}.`);
-    lines.push('Next: verify production, then run workflow:clean.');
+    lines.push('Next: verify production, then run pipelane:clean.');
   } else {
-    lines.push('Next: run workflow:deploy -- staging.');
+    lines.push('Next: run pipelane:deploy -- staging.');
   }
 
   printResult(parsed.flags, {
