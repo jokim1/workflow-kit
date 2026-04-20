@@ -1,18 +1,18 @@
-<!-- workflow-kit:command:clean -->
+<!-- pipelane:command:clean -->
 Report workflow cleanup status and prune stale task locks when requested.
 
 Run:
 
 ```bash
-npm run workflow:clean
+npm run pipelane:clean
 ```
 
 To prune stale task locks, scope the prune explicitly:
 
 ```bash
-npm run workflow:clean -- --apply --task "<task name or slug>"
+npm run pipelane:clean -- --apply --task "<task name or slug>"
 # or, to prune every stale lock in one shot:
-npm run workflow:clean -- --apply --all-stale
+npm run pipelane:clean -- --apply --all-stale
 ```
 
 Rules:
@@ -22,5 +22,5 @@ Rules:
 - Locks updated in the last 5 minutes are preserved even when scope is set; they may belong to an in-progress task.
 - Do not assume worktrees should be deleted automatically.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

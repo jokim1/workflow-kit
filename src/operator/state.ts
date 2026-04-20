@@ -21,7 +21,7 @@ export const DEFAULT_WORKFLOW_ALIASES: Record<WorkflowCommand, string> = {
 };
 
 // Managed Claude command files that aren't workflow operator actions. These
-// still ship with `<!-- workflow-kit:command:<name> -->` markers, flow through
+// still ship with `<!-- pipelane:command:<name> -->` markers, flow through
 // the collision / prune / consumer-extension machinery, but are not aliased
 // (filename is fixed) and are not dispatched via `pipelane run <name>`.
 export const MANAGED_EXTRA_COMMANDS = ['pipelane'] as const;
@@ -93,7 +93,7 @@ export interface SyncDocsConfig {
   contributingSection?: boolean;
   agentsSection?: boolean;
   docsReleaseWorkflow?: boolean;
-  workflowClaudeTemplate?: boolean;
+  pipelaneClaudeTemplate?: boolean;
   packageScripts?: boolean;
 }
 
@@ -103,7 +103,7 @@ export const DEFAULT_SYNC_DOCS: Required<SyncDocsConfig> = {
   contributingSection: true,
   agentsSection: true,
   docsReleaseWorkflow: true,
-  workflowClaudeTemplate: true,
+  pipelaneClaudeTemplate: true,
   packageScripts: true,
 };
 
@@ -134,7 +134,7 @@ export const DEFAULT_BRANCH_PREFIX = 'codex/';
 // Patterns matched against changed-file basenames during `pipelane run pr`
 // before the silent `git add -A`. Keep this list short and unambiguous —
 // the goal is "operator forgot to gitignore their secrets" not general
-// pre-commit hooks. Override in .project-workflow.json when a repo legit
+// pre-commit hooks. Override in .pipelane.json when a repo legit
 // tracks one of these (e.g. a docs-only `CLAUDE.md`).
 export const DEFAULT_PR_PATH_DENY_LIST = [
   'CLAUDE.md',
@@ -241,12 +241,16 @@ export interface OperatorFlags {
   json: boolean;
   offline: boolean;
   override: boolean;
+  patch: boolean;
   reason: string;
   sha: string;
   task: string;
+  branch: string;
+  file: string;
   title: string;
   message: string;
   mode: string;
+  scope: string;
   surfaces: string[];
   execute: boolean;
   confirmToken: string;
@@ -280,7 +284,7 @@ export interface WorkflowContext {
 
 export const DEFAULT_MODE: Mode = 'build';
 export const DEFAULT_SURFACES = ['frontend', 'edge', 'sql'];
-export const CONFIG_FILENAME = '.project-workflow.json';
+export const CONFIG_FILENAME = '.pipelane.json';
 const MODE_STATE_FILENAME = 'mode-state.json';
 const PR_STATE_FILENAME = 'pr-state.json';
 const DEPLOY_STATE_FILENAME = 'deploy-state.json';
@@ -319,7 +323,7 @@ export function defaultWorkflowConfig(projectKey: string, displayName: string): 
     projectKey,
     displayName,
     baseBranch: 'main',
-    stateDir: 'workflow-kit-state',
+    stateDir: 'pipelane-state',
     taskWorktreeDirName: `${projectKey}-worktrees`,
     branchPrefix: DEFAULT_BRANCH_PREFIX,
     legacyBranchPrefixes: [],
@@ -481,7 +485,7 @@ export function loadWorkflowConfig(repoRoot: string): WorkflowConfig {
   const configPath = resolveConfigPath(repoRoot);
 
   if (!existsSync(configPath)) {
-    throw new Error(`No ${CONFIG_FILENAME} found in ${repoRoot}. Run workflow-kit init first.`);
+    throw new Error(`No ${CONFIG_FILENAME} found in ${repoRoot}. Run pipelane bootstrap first.`);
   }
 
   const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as Partial<WorkflowConfig>;
@@ -536,7 +540,7 @@ function normalizeSyncDocsConfig(raw: SyncDocsConfig | undefined): SyncDocsConfi
     'contributingSection',
     'agentsSection',
     'docsReleaseWorkflow',
-    'workflowClaudeTemplate',
+    'pipelaneClaudeTemplate',
     'packageScripts',
   ];
   const out: SyncDocsConfig = {};
@@ -883,12 +887,16 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
     json: false,
     offline: false,
     override: false,
+    patch: false,
     reason: '',
     sha: '',
     task: '',
+    branch: '',
+    file: '',
     title: '',
     message: '',
     mode: '',
+    scope: '',
     surfaces: [],
     execute: false,
     confirmToken: '',
@@ -928,6 +936,11 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
       continue;
     }
 
+    if (token === '--patch') {
+      flags.patch = true;
+      continue;
+    }
+
     if (token === '--reason') {
       flags.reason = argv[index + 1] ?? '';
       index += 1;
@@ -936,6 +949,18 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
 
     if (token === '--task') {
       flags.task = argv[index + 1] ?? '';
+      index += 1;
+      continue;
+    }
+
+    if (token === '--branch') {
+      flags.branch = argv[index + 1] ?? '';
+      index += 1;
+      continue;
+    }
+
+    if (token === '--file') {
+      flags.file = argv[index + 1] ?? '';
       index += 1;
       continue;
     }
@@ -960,6 +985,12 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
 
     if (token === '--mode') {
       flags.mode = argv[index + 1] ?? '';
+      index += 1;
+      continue;
+    }
+
+    if (token === '--scope') {
+      flags.scope = argv[index + 1] ?? '';
       index += 1;
       continue;
     }
@@ -1048,4 +1079,8 @@ export function parseSurfaceList(config: WorkflowConfig, values: string[]): stri
 
 export function homeCodexDir(): string {
   return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+}
+
+export function homeClaudeDir(): string {
+  return process.env.CLAUDE_HOME || path.join(os.homedir(), '.claude');
 }

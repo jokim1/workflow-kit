@@ -48,7 +48,7 @@ export const STABLE_ACTION_IDS = [
   'doctor.diagnose',
   'doctor.probe',
   // v1.1: rollback.* — one-command deploy recovery. Pipelane-only
-  // extension above Rocketboard's shared baseline. rollback.staging is
+  // extension above the base action set. rollback.staging is
   // low-risk (staging is allowed to break); rollback.prod joins the
   // risky set alongside deploy.prod and requires a confirm-token.
   // --revert-pr is NOT exposed as an API action — opening a PR from a
@@ -137,7 +137,7 @@ export function buildActionPreflightEnvelope(cwd: string, actionId: StableAction
       },
     };
     return buildApiEnvelope<ActionPreflightData>({
-      command: 'workflow.api.action',
+      command: 'pipelane.api.action',
       ok: false,
       message: gate.reason,
       data,
@@ -171,7 +171,7 @@ export function buildActionPreflightEnvelope(cwd: string, actionId: StableAction
   };
 
   return buildApiEnvelope<ActionPreflightData>({
-    command: 'workflow.api.action',
+    command: 'pipelane.api.action',
     ok: true,
     message: `${actionId} preflight ready`,
     data,
@@ -234,7 +234,7 @@ export async function runActionExecute(cwd: string, actionId: StableActionId, pa
         },
       };
       return buildApiEnvelope<ActionPreflightData>({
-        command: 'workflow.api.action',
+        command: 'pipelane.api.action',
         ok: false,
         message,
         data: preflight,
@@ -267,7 +267,7 @@ export async function runActionExecute(cwd: string, actionId: StableActionId, pa
   };
 
   return buildApiEnvelope<ActionExecutionData>({
-    command: 'workflow.api.action',
+    command: 'pipelane.api.action',
     ok: result.ok,
     message: result.ok ? `${actionId} executed` : `${actionId} failed: ${result.stderr || 'see execution.stderr'}`,
     data,
@@ -604,4 +604,3 @@ export function parseApiActionFlags(argv: string[]): { execute: boolean; confirm
   }
   return { execute, confirmToken, rest };
 }
-

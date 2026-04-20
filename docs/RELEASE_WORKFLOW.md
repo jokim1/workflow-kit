@@ -203,8 +203,9 @@ sense for the repo.
 ### Setup (once per machine, per repo)
 
 ```
-npx pipelane init --project "My App"    # scaffolds tracked files (shipped)
-npm run pipelane:setup                  # installs aliases + writes templates (shipped)
+npx -y pipelane@github:jokim1/pipelane#main bootstrap --project "My App"  # one-shot bootstrap
+# or, if pipelane is already on PATH:
+pipelane bootstrap --project "My App"
 /doctor --fix                            # interactive config wizard (v1)
 /doctor --probe                          # verify healthcheck URLs respond (v1)
 ```
@@ -237,7 +238,7 @@ escape hatch).
 
 `release-check` runs the built-in observed-deploys gate, then dispatches
 any consumer-configured plugin checks. Plugins are opt-in via the
-`checks` block in `.project-workflow.json`:
+`checks` block in `.pipelane.json`:
 
 ```json
 {
@@ -497,17 +498,20 @@ in `AGENTS.md` where enforcement is social.
 
 | Command | Purpose | Status |
 | --- | --- | --- |
-| `npx pipelane init --project "<name>"` | Scaffold tracked files in a new repo | rename-pending |
+| `pipelane bootstrap --project "<name>"` | Install pipelane into the repo, scaffold tracked files, and run setup | shipped |
+| `npx pipelane init --project "<name>"` | Scaffold tracked files in a repo that already has pipelane installed locally | rename-pending |
 | `npm run pipelane:setup` | Install aliases, templates, Claude commands | rename-pending |
+| `pipelane install-claude` | Install the global Claude `/init-pipelane` bootstrap command on this machine | shipped |
+| `pipelane install-codex` | Install the global Codex `/init-pipelane` bootstrap command on this machine | shipped |
 
 ## Configuration
 
 ### Tracked in git (repo policy)
 
-- `.project-workflow.json` — baseBranch, surfaces, aliases, prePrChecks, deploy workflow names
+- `.pipelane.json` — baseBranch, surfaces, aliases, prePrChecks, deploy workflow names
 - `AGENTS.md` — policy for AI operators
 - `.claude/commands/*` — thin slash adapters
-- `workflow/CLAUDE.template.md` — template used to bootstrap local operator state
+- `pipelane/CLAUDE.template.md` — template used to bootstrap local operator state
 - `docs/RELEASE_WORKFLOW.md` — this file
 
 ### Local-only (operator state, git-ignored)
@@ -522,9 +526,9 @@ no flag can substitute for a succeeded, verified staging deploy. Do not rely on 
 
 ### Internal state (git common-dir, shared across worktrees)
 
-- `workflow-kit-state/task-locks/<slug>.json` — active task identities
-- `workflow-kit-state/pr-state.json` — per-task PR records
-- `workflow-kit-state/deploy-state.json` — deploy records (new schema in v0)
+- `pipelane-state/task-locks/<slug>.json` — active task identities
+- `pipelane-state/pr-state.json` — per-task PR records
+- `pipelane-state/deploy-state.json` — deploy records (new schema in v0)
 
 State lives in `git common-dir` intentionally so multiple worktrees for
 the same repo share one state view. Do not move this.
@@ -574,7 +578,7 @@ spec fixes. The change manifest tracks which PR closes each one.
 
 ## Troubleshooting
 
-- **Missing ****`.project-workflow.json`** → `npx pipelane init`
+- **Missing ****`.pipelane.json`** → `pipelane bootstrap --project "<name>"` or `npx pipelane init`
 - **Task already active** → `/resume --task "<slug>"`
 - **Release lane blocked** → `/doctor` (diagnose), `/doctor --fix`
   (configure), `/doctor --probe` (verify)
@@ -607,7 +611,7 @@ spec fixes. The change manifest tracks which PR closes each one.
 | `TaskLock.nextAction` | **v1** |
 | `/status --week / --stuck / --blast` | **v1** |
 | WIP soft warn at 3 | **v1** |
-| `workflow-kit` → `pipelane` rename | **v2** |
+| `pipelane` → `pipelane` rename | **v2** |
 | Cut Codex dual-install surface | **v2** |
 
 See `docs/CHANGE_MANIFEST.md` for the concrete file-by-file change list.

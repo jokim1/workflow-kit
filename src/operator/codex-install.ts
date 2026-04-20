@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { installGlobalRuntime } from './global-runtime.ts';
 import { aliasCommandName, homeCodexDir, readJsonFile, resolveWorkflowAliases, type WorkflowCommand, WORKFLOW_COMMANDS, writeJsonFile } from './state.ts';
 
 const MANAGED_CODEX_SKILLS_FILENAME = 'managed-skills.json';
-const WORKFLOW_KIT_SKILL_MARKER = 'Run the generic workflow-kit wrapper for this repo.';
-const LEGACY_ROCKETBOARD_SKILL_MARKER = 'rocketboard-workflow/bin/run-workflow.sh';
+const MANAGED_PIPELANE_DIR = '.pipelane';
+const PIPELANE_SKILL_MARKER = 'Run the generic pipelane wrapper for this repo.';
+const INIT_PIPELANE_SKILL_NAME = 'init-pipelane';
 
 interface ManagedCodexSkillsManifest {
   version: number;
@@ -16,19 +18,39 @@ function buildSkill(slashAlias: string, codexHome: string): string {
   return `---
 name: ${aliasCommandName(slashAlias)}
 version: 1.0.0
-description: Run the workflow-kit command currently mapped to ${slashAlias} in this repo.
+description: Run the pipelane command currently mapped to ${slashAlias} in this repo.
 allowed-tools:
   - Bash
 ---
 
-Run the generic workflow-kit wrapper for this repo.
+Run the generic pipelane wrapper for this repo.
 
 1. Parse any arguments that appear after \`${slashAlias}\` in the user's message.
 2. Preserve quoted substrings when building the shell command.
 3. Run:
-   \`${codexHome}/skills/workflow-kit/bin/run-workflow.sh --alias ${slashAlias} <parsed arguments>\`
+   \`${codexHome}/skills/${MANAGED_PIPELANE_DIR}/bin/run-pipelane.sh --alias ${slashAlias} <parsed arguments>\`
 4. Stream the command output directly.
-5. If the current repo is not workflow-kit enabled, return the refusal unchanged.
+5. If the current repo is not pipelane enabled, return the refusal unchanged.
+`;
+}
+
+function buildBootstrapSkill(codexHome: string): string {
+  return `---
+name: ${INIT_PIPELANE_SKILL_NAME}
+version: 1.0.0
+description: Bootstrap the current repo with pipelane.
+allowed-tools:
+  - Bash
+---
+
+${PIPELANE_SKILL_MARKER}
+
+1. Parse any arguments that appear after \`/${INIT_PIPELANE_SKILL_NAME}\` in the user's message.
+2. Preserve quoted substrings when building the shell command.
+3. Run:
+   \`${codexHome}/skills/${MANAGED_PIPELANE_DIR}/bin/bootstrap-pipelane.sh <parsed arguments>\`
+4. Stream the command output directly.
+5. If setup changed the slash command inventory, tell the user to reopen Codex if needed.
 `;
 }
 
@@ -37,7 +59,7 @@ function buildRunScript(): string {
 set -eu
 
 if [ "$#" -lt 1 ]; then
-  echo "Usage: run-workflow.sh <command> [args...]" >&2
+  echo "Usage: run-pipelane.sh <command> [args...]" >&2
   exit 64
 fi
 
@@ -46,18 +68,18 @@ shift
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -z "$repo_root" ]; then
-  echo "This command only works inside a workflow-kit repo." >&2
+  echo "This command only works inside a pipelane repo." >&2
   exit 2
 fi
 
-if [ ! -f "$repo_root/.project-workflow.json" ]; then
-  echo "This repo is not workflow-kit enabled. Run workflow-kit init first." >&2
+if [ ! -f "$repo_root/.pipelane.json" ]; then
+  echo "This repo is not pipelane enabled. Run /init-pipelane or pipelane bootstrap first." >&2
   exit 2
 fi
 
 if [ "$subcommand" = "--alias" ]; then
   if [ "$#" -lt 1 ]; then
-    echo "Usage: run-workflow.sh --alias </command> [args...]" >&2
+    echo "Usage: run-pipelane.sh --alias </command> [args...]" >&2
     exit 64
   fi
 
@@ -70,9 +92,9 @@ const path = require('node:path');
 
 const repoRoot = process.argv[2];
 const aliasName = (process.argv[3] || '').trim().toLowerCase();
-const configPath = path.join(repoRoot, '.project-workflow.json');
+const configPath = path.join(repoRoot, '.pipelane.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-const commands = ['devmode', 'new', 'resume', 'pr', 'merge', 'deploy', 'clean'];
+const commands = ['devmode', 'new', 'resume', 'pr', 'merge', 'deploy', 'clean', 'status', 'doctor', 'rollback'];
 const defaults = {
   devmode: '/devmode',
   new: '/new',
@@ -81,6 +103,9 @@ const defaults = {
   merge: '/merge',
   deploy: '/deploy',
   clean: '/clean',
+  status: '/status',
+  doctor: '/doctor',
+  rollback: '/rollback',
 };
 
 const normalize = (value, fallback) => {
@@ -105,7 +130,7 @@ NODE
 )"
 
   if [ -z "$resolved_command" ]; then
-    echo "Alias $alias_name is not configured for this repo. Rerun workflow:setup if aliases changed." >&2
+    echo "Alias $alias_name is not configured for this repo. Rerun pipelane:setup if aliases changed." >&2
     exit 2
   fi
 
@@ -113,26 +138,36 @@ NODE
 fi
 
 cd "$repo_root"
-exec npm run "workflow:$subcommand" -- "$@"
+exec npm run "pipelane:$subcommand" -- "$@"
+`;
+}
+
+function buildBootstrapScript(pipelaneBinPath: string): string {
+  return `#!/bin/sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$repo_root"
+exec "${pipelaneBinPath}" bootstrap "$@"
 `;
 }
 
 function managedCodexSkillsPath(skillsRoot: string): string {
-  return path.join(skillsRoot, 'workflow-kit', MANAGED_CODEX_SKILLS_FILENAME);
+  return path.join(skillsRoot, MANAGED_PIPELANE_DIR, MANAGED_CODEX_SKILLS_FILENAME);
 }
 
 function skillDocPath(skillsRoot: string, skillName: string): string {
   return path.join(skillsRoot, skillName, 'SKILL.md');
 }
 
-function isManagedWorkflowSkill(skillsRoot: string, skillName: string): boolean {
+function isManagedPipelaneSkill(skillsRoot: string, skillName: string): boolean {
   const targetPath = skillDocPath(skillsRoot, skillName);
   if (!existsSync(targetPath)) {
     return false;
   }
 
   const content = readFileSync(targetPath, 'utf8');
-  return content.includes(WORKFLOW_KIT_SKILL_MARKER) || content.includes(LEGACY_ROCKETBOARD_SKILL_MARKER);
+  return content.includes(PIPELANE_SKILL_MARKER);
 }
 
 function loadManagedCodexManifest(skillsRoot: string): ManagedCodexSkillsManifest {
@@ -156,11 +191,11 @@ function loadManagedCodexSkills(skillsRoot: string, manifest: ManagedCodexSkills
 
   if (existsSync(skillsRoot)) {
     for (const entry of readdirSync(skillsRoot)) {
-      if (entry === 'workflow-kit') {
+      if (entry === MANAGED_PIPELANE_DIR) {
         continue;
       }
 
-      if (isManagedWorkflowSkill(skillsRoot, entry)) {
+      if (isManagedPipelaneSkill(skillsRoot, entry)) {
         managed.add(entry);
       }
     }
@@ -168,7 +203,7 @@ function loadManagedCodexSkills(skillsRoot: string, manifest: ManagedCodexSkills
 
   for (const skills of Object.values(manifest.repos)) {
     for (const entry of skills) {
-      if (isManagedWorkflowSkill(skillsRoot, entry)) {
+      if (isManagedPipelaneSkill(skillsRoot, entry)) {
         managed.add(entry);
       }
     }
@@ -182,7 +217,7 @@ function assertNoCodexSkillCollisions(skillsRoot: string, desiredSkills: Set<str
     const targetDir = path.join(skillsRoot, skillName);
     if (existsSync(targetDir) && !managedSkills.has(skillName)) {
       throw new Error(
-        `Codex skill alias collision: ${targetDir} already exists and is not managed by workflow-kit. Choose a different alias in .project-workflow.json or remove the conflicting skill.`,
+        `Codex skill alias collision: ${targetDir} already exists and is not managed by pipelane. Choose a different alias in .pipelane.json or remove the conflicting skill.`,
       );
     }
   }
@@ -190,7 +225,7 @@ function assertNoCodexSkillCollisions(skillsRoot: string, desiredSkills: Set<str
 
 function pruneManagedCodexSkills(skillsRoot: string, desiredSkills: Set<string>, managedSkills: Set<string>): void {
   for (const skillName of managedSkills) {
-    if (!desiredSkills.has(skillName) && isManagedWorkflowSkill(skillsRoot, skillName)) {
+    if (!desiredSkills.has(skillName) && isManagedPipelaneSkill(skillsRoot, skillName)) {
       rmSync(path.join(skillsRoot, skillName), { recursive: true, force: true });
     }
   }
@@ -208,10 +243,12 @@ function saveManagedCodexManifest(skillsRoot: string, manifest: ManagedCodexSkil
   });
 }
 
-function desiredCodexSkillsForRepo(manifest: ManagedCodexSkillsManifest, repoRoot: string, aliases: Record<WorkflowCommand, string>): Set<string> {
-  manifest.repos[repoRoot] = WORKFLOW_COMMANDS.map((command) => aliasCommandName(aliases[command]));
+function desiredCodexSkills(manifest: ManagedCodexSkillsManifest, repoRoot?: string, aliases?: Record<WorkflowCommand, string>): Set<string> {
+  if (repoRoot && aliases) {
+    manifest.repos[repoRoot] = WORKFLOW_COMMANDS.map((command) => aliasCommandName(aliases[command]));
+  }
 
-  const desiredSkills = new Set<string>();
+  const desiredSkills = new Set<string>([INIT_PIPELANE_SKILL_NAME]);
   for (const skills of Object.values(manifest.repos)) {
     for (const skillName of skills) {
       desiredSkills.add(skillName);
@@ -222,33 +259,46 @@ function desiredCodexSkillsForRepo(manifest: ManagedCodexSkillsManifest, repoRoo
 }
 
 export function installCodexWrappers(
-  options: { codexHome?: string; repoRoot: string; aliases?: Partial<Record<WorkflowCommand, string>> | Record<string, string> } ,
+  options: { codexHome?: string; repoRoot?: string; aliases?: Partial<Record<WorkflowCommand, string>> | Record<string, string> } = {},
 ): { codexHome: string; installed: string[] } {
   const codexHome = options.codexHome || homeCodexDir();
   const skillsRoot = path.join(codexHome, 'skills');
-  const workflowKitRoot = path.join(skillsRoot, 'workflow-kit');
-  const binDir = path.join(workflowKitRoot, 'bin');
-  const aliases = resolveWorkflowAliases(options.aliases);
-
-  mkdirSync(binDir, { recursive: true });
-  writeFileSync(path.join(binDir, 'run-workflow.sh'), buildRunScript(), { mode: 0o755, encoding: 'utf8' });
-
+  const pipelaneRoot = path.join(skillsRoot, MANAGED_PIPELANE_DIR);
+  const binDir = path.join(pipelaneRoot, 'bin');
+  const aliases = options.repoRoot ? resolveWorkflowAliases(options.aliases) : null;
   const manifest = loadManagedCodexManifest(skillsRoot);
-  const desiredSkills = desiredCodexSkillsForRepo(manifest, options.repoRoot, aliases);
+
+  installGlobalRuntime(pipelaneRoot, {
+    host: 'codex',
+    legacyMarkers: [MANAGED_CODEX_SKILLS_FILENAME],
+  });
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(path.join(binDir, 'run-pipelane.sh'), buildRunScript(), { mode: 0o755, encoding: 'utf8' });
+  writeFileSync(path.join(binDir, 'bootstrap-pipelane.sh'), buildBootstrapScript(path.join(pipelaneRoot, 'bin', 'pipelane')), { mode: 0o755, encoding: 'utf8' });
+
+  const desiredSkills = desiredCodexSkills(manifest, options.repoRoot, aliases ?? undefined);
   const managedSkills = loadManagedCodexSkills(skillsRoot, manifest);
   assertNoCodexSkillCollisions(skillsRoot, desiredSkills, managedSkills);
   pruneManagedCodexSkills(skillsRoot, desiredSkills, managedSkills);
 
   const installed: string[] = [];
   for (const skillName of desiredSkills) {
-    const slashAlias = `/${skillName}`;
     const skillDir = path.join(skillsRoot, skillName);
     mkdirSync(skillDir, { recursive: true });
+    if (skillName === INIT_PIPELANE_SKILL_NAME) {
+      writeFileSync(path.join(skillDir, 'SKILL.md'), buildBootstrapSkill(codexHome), 'utf8');
+      installed.push(`/${skillName}`);
+      continue;
+    }
+
+    const slashAlias = `/${skillName}`;
     writeFileSync(path.join(skillDir, 'SKILL.md'), buildSkill(slashAlias, codexHome), 'utf8');
   }
 
-  for (const command of WORKFLOW_COMMANDS) {
-    installed.push(aliases[command]);
+  if (aliases) {
+    for (const command of WORKFLOW_COMMANDS) {
+      installed.push(aliases[command]);
+    }
   }
   saveManagedCodexManifest(skillsRoot, manifest);
 

@@ -1,10 +1,10 @@
-<!-- workflow-kit:command:pr -->
+<!-- pipelane:command:pr -->
 Prepare and open, or update, a pull request for the current task.
 
 Run:
 
 ```bash
-npm run workflow:pr -- $ARGUMENTS
+npm run pipelane:pr -- $ARGUMENTS
 ```
 
 This command:
@@ -19,5 +19,5 @@ If the worktree is dirty and no `--title` is provided for a new PR, the command 
 
 Display the output directly. Report the PR URL and the next step.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

@@ -1,26 +1,22 @@
 {
   "name": "pipelane",
   "version": "0.2.0",
-  "private": true,
   "type": "module",
-  "description": "Pipelane — release cockpit for AI vibe coders. Formerly workflow-kit.",
+  "description": "Pipelane — release cockpit for AI vibe coders.",
   "bin": {
-    "pipelane": "./bin/pipelane",
-    "workflow-kit": "./bin/workflow-kit"
+    "pipelane": "./bin/pipelane"
   },
   "files": [
     "bin",
     "dist",
     "templates",
-    "workflow",
     "docs/RELEASE_WORKFLOW.md",
     "docs/PIPELANE_BOARD.md",
+    "docs/PIPELANE_API.md",
     "README.md"
   ],
   "scripts": {
-    "test": "node --test test/workflow-kit.test.mjs",
-    "pretest:differential": "npm run build",
-    "test:differential": "node --test test/differential/*.test.mjs",
+    "test": "node --test test/pipelane.test.mjs",
     "smoke": "node ./src/cli.ts --help",
     "dashboard": "node ./src/cli.ts dashboard",
     "board": "node ./src/cli.ts board",

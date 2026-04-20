@@ -1,10 +1,10 @@
-<!-- workflow-kit:command:deploy -->
+<!-- pipelane:command:deploy -->
 Deploy the merged SHA for this repo.
 
 Run:
 
 ```bash
-npm run workflow:deploy -- $ARGUMENTS
+npm run pipelane:deploy -- $ARGUMENTS
 ```
 
 Expected arguments:
@@ -22,5 +22,5 @@ using the token issued by a prior `api action deploy.prod` preflight.
 
 Display the output directly. Report the environment, SHA, surfaces, and next step.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

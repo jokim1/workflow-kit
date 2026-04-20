@@ -1,4 +1,4 @@
-<!-- workflow-kit:command:rollback -->
+<!-- pipelane:command:rollback -->
 Roll back the last staging or production deploy to the most recent verified-good SHA.
 
 Two modes:
@@ -7,12 +7,12 @@ Two modes:
 # Redeploy the last succeeded SHA for the named environment. Dispatches a
 # fresh gh workflow run, probes healthchecks, and records a new
 # DeployRecord with `rollbackOfSha` pointing at the failing SHA.
-npm run workflow:rollback -- staging
-npm run workflow:rollback -- prod
+npm run pipelane:rollback -- staging
+npm run pipelane:rollback -- prod
 
 # Alternative recovery path: open a `git revert <mergeCommit>` PR via gh
 # pr create. Never pushes to main directly. Release-mode only.
-npm run workflow:rollback -- prod --revert-pr
+npm run pipelane:rollback -- prod --revert-pr
 ```
 
 Rules:
@@ -30,5 +30,5 @@ Rules:
 - Specify `--surfaces frontend,edge` to narrow scope; by default rollback
   targets every surface the current task lock covers.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

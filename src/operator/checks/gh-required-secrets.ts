@@ -4,7 +4,7 @@ import type { Check, CheckContext, CheckFinding, CheckOutcome } from './types.ts
 export const GH_REQUIRED_SECRETS_PLUGIN = 'gh-required-secrets';
 
 // Release-mode environments the plugin checks when requiredEnvironmentSecrets
-// is set. Matches Rocketboard's RELEASE_ENVIRONMENTS constant.
+// is set.
 const RELEASE_ENVIRONMENTS: Array<'staging' | 'production'> = ['staging', 'production'];
 
 // Test hook: a JSON object mapping environment (or '' for repo-level) to

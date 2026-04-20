@@ -1,16 +1,16 @@
-<!-- workflow-kit:command:new -->
+<!-- pipelane:command:new -->
 Create a fresh task workspace for this repo.
 
 Run:
 
 ```bash
-npm run workflow:new -- $ARGUMENTS
+npm run pipelane:new -- $ARGUMENTS
 ```
 
 Expected form (with a task label):
 
 ```bash
-npm run workflow:new -- --task "task name"
+npm run pipelane:new -- --task "task name"
 ```
 
 The task label is optional. You can also run `/new` with no arguments and a
@@ -26,5 +26,5 @@ This command:
 
 Display the output directly. Call out that the chat/workspace has not moved automatically yet.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

@@ -187,7 +187,7 @@ export async function handleConfigure(cwd: string, argv: string[]): Promise<Conf
   } else {
     process.stdout.write([
       `Wrote Deploy Configuration to ${claudePath}`,
-      createdClaude ? 'Created new CLAUDE.md from workflow template.' : 'Updated the Deploy Configuration block in place.',
+      createdClaude ? 'Created new CLAUDE.md from the Pipelane template.' : 'Updated the Deploy Configuration block in place.',
     ].join('\n') + '\n');
   }
 
@@ -195,7 +195,7 @@ export async function handleConfigure(cwd: string, argv: string[]): Promise<Conf
 }
 
 // Matches setupConsumerRepo's strict invariant: configure cannot seed a fresh
-// CLAUDE.md without a .project-workflow.json to render template variables
+// CLAUDE.md without a .pipelane.json to render template variables
 // (DISPLAY_NAME, ALIAS_*, DEPLOY_WORKFLOW_NAME) against. An operator who hits
 // this error ran configure before init; the fix is to run `pipelane init` first.
 function loadWorkflowConfigOrThrow(repoRoot: string): WorkflowConfig {
@@ -334,7 +334,7 @@ Flags (all optional; any omitted field keeps its current value):
   --supabase-staging-project-ref=<ref>
   --supabase-production-project-ref=<ref>
 
-If CLAUDE.md is missing, pipelane configure seeds it from the workflow template
+If CLAUDE.md is missing, pipelane configure seeds it from the Pipelane template
 before writing the Deploy Configuration block. Sections outside that block are
 left untouched on re-runs.
 `);

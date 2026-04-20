@@ -1,19 +1,19 @@
-<!-- workflow-kit:command:doctor -->
+<!-- pipelane:command:doctor -->
 Diagnose deploy configuration, run live probes, or launch the fix wizard.
 
 Three modes:
 
 ```bash
 # Read CLAUDE.md, list missing deploy fields, detect platform.
-npm run workflow:doctor
+npm run pipelane:doctor
 
 # Hit each configured staging/production healthcheck URL and record
 # liveness to probe-state.json. Required for release-mode readiness.
-npm run workflow:doctor -- --probe
+npm run pipelane:doctor -- --probe
 
 # Interactive wizard: asks platform + URLs, writes the Deploy
 # Configuration block in CLAUDE.md, then auto-runs --probe.
-npm run workflow:doctor -- --fix
+npm run pipelane:doctor -- --fix
 ```
 
 Rules:
@@ -23,5 +23,5 @@ Rules:
 - `/doctor --fix` requires a TTY. Use `pipelane configure` for scripted setup.
 - Diagnose is a pure read — no side effects, safe to run anytime.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

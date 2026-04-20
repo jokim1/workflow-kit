@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
+import { PIPELANE_GITHUB_URL, PIPELANE_REPO_SLUG, resolvePipelaneInstallSpec } from './install-source.ts';
 import { resolveRepoRoot, runCommandCapture } from './state.ts';
 
 export interface UpdateOptions {
@@ -27,10 +28,6 @@ export interface UpdateResult {
   action: 'up-to-date' | 'checked' | 'skipped' | 'installed';
   message: string;
 }
-
-const PIPELANE_GITHUB_URL = 'https://github.com/jokim1/pipelane.git';
-const PIPELANE_REPO_SLUG = 'jokim1/pipelane';
-const PIPELANE_GITHUB_SPEC = 'pipelane@github:jokim1/pipelane#main';
 
 export function parseUpdateArgs(argv: string[]): UpdateOptions {
   const options: UpdateOptions = { check: false, yes: false, json: false };
@@ -130,7 +127,7 @@ function resolveInstalledPipelane(repoRoot: string): { installedSha: string; ins
   const packagePath = path.join(repoRoot, 'node_modules', 'pipelane', 'package.json');
   if (!existsSync(packagePath)) {
     throw new Error(
-      `pipelane is not installed in ${repoRoot}. Install it with: npm install --save-dev pipelane@github:jokim1/pipelane#main`,
+      `pipelane is not installed in ${repoRoot}. Install it with: npm install --save-dev ${resolvePipelaneInstallSpec()}`,
     );
   }
   const installedVersion = readInstalledVersion(packagePath);
@@ -216,7 +213,7 @@ function fetchCompare(
 }
 
 function installLatest(repoRoot: string): void {
-  const result = runCommandCapture('npm', ['install', PIPELANE_GITHUB_SPEC], { cwd: repoRoot });
+  const result = runCommandCapture('npm', ['install', resolvePipelaneInstallSpec()], { cwd: repoRoot });
   if (!result.ok) {
     const detail = result.stderr || result.stdout;
     throw new Error(`npm install failed:\n${detail}`);

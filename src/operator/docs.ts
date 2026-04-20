@@ -23,65 +23,65 @@ import {
 import { emptyDeployConfig, renderDeployConfigSection } from './release-gate.ts';
 import { installCodexWrappers } from './codex-install.ts';
 
-const README_MARKER_START = '<!-- workflow-kit:readme:start -->';
-const README_MARKER_END = '<!-- workflow-kit:readme:end -->';
-const CONTRIBUTING_MARKER_START = '<!-- workflow-kit:contributing:start -->';
-const CONTRIBUTING_MARKER_END = '<!-- workflow-kit:contributing:end -->';
-const AGENTS_MARKER_START = '<!-- workflow-kit:agents:start -->';
-const AGENTS_MARKER_END = '<!-- workflow-kit:agents:end -->';
-const CLAUDE_COMMAND_MARKER = '<!-- workflow-kit:command:';
-const CONSUMER_EXTENSION_MARKER_START = '<!-- workflow-kit:consumer-extension:start -->';
-const CONSUMER_EXTENSION_MARKER_END = '<!-- workflow-kit:consumer-extension:end -->';
-const MANAGED_CLAUDE_COMMANDS_FILENAME = '.workflow-kit-managed.json';
+const README_MARKER_START = '<!-- pipelane:readme:start -->';
+const README_MARKER_END = '<!-- pipelane:readme:end -->';
+const CONTRIBUTING_MARKER_START = '<!-- pipelane:contributing:start -->';
+const CONTRIBUTING_MARKER_END = '<!-- pipelane:contributing:end -->';
+const AGENTS_MARKER_START = '<!-- pipelane:agents:start -->';
+const AGENTS_MARKER_END = '<!-- pipelane:agents:end -->';
+const CLAUDE_COMMAND_MARKER = '<!-- pipelane:command:';
+const CONSUMER_EXTENSION_MARKER_START = '<!-- pipelane:consumer-extension:start -->';
+const CONSUMER_EXTENSION_MARKER_END = '<!-- pipelane:consumer-extension:end -->';
+const MANAGED_CLAUDE_COMMANDS_FILENAME = '.pipelane-managed.json';
 // Two-signature legacy detection: first-line description + the command's
-// npm script prefix. Truncated to `npm run workflow:<cmd>` so the match
+// npm script prefix. Truncated to `npm run pipelane:<cmd>` so the match
 // survives any `-- $ARGUMENTS` / `-- --apply` / bare-invocation variant
 // current-main templates have emitted. Consumers that had these files
 // generated before this PR carry no marker, so detection falls back here.
-// Exported for structural validation in test/workflow-kit.test.mjs —
+// Exported for structural validation in test/pipelane.test.mjs —
 // every MANAGED_COMMANDS member must have a non-empty signature array so
 // pre-marker consumer files upgrade cleanly on the next setup instead of
 // raising a collision error.
 export const LEGACY_CLAUDE_SIGNATURES: Record<ManagedCommand, string[]> = {
   clean: [
     'Report workflow cleanup status and prune stale task locks when requested.',
-    'npm run workflow:clean',
+    'npm run pipelane:clean',
   ],
   deploy: [
     'Deploy the merged SHA for this repo.',
-    'npm run workflow:deploy',
+    'npm run pipelane:deploy',
   ],
   devmode: [
     "Switch or check the repo's development mode (build or release).",
-    'npm run workflow:devmode',
+    'npm run pipelane:devmode',
   ],
   merge: [
     "Merge the current task's pull request.",
-    'npm run workflow:merge',
+    'npm run pipelane:merge',
   ],
   new: [
     'Create a fresh task workspace for this repo.',
-    'npm run workflow:new',
+    'npm run pipelane:new',
   ],
   pr: [
     'Prepare and open, or update, a pull request for the current task.',
-    'npm run workflow:pr',
+    'npm run pipelane:pr',
   ],
   resume: [
     'Resume an existing task workspace for this repo.',
-    'npm run workflow:resume',
+    'npm run pipelane:resume',
   ],
   status: [
-    'Render a one-screen terminal cockpit of the workflow:api snapshot.',
-    'npm run workflow:status',
+    'Render a one-screen terminal cockpit of the pipelane:api snapshot.',
+    'npm run pipelane:status',
   ],
   doctor: [
     'Diagnose deploy configuration, run live probes, or launch the fix wizard.',
-    'npm run workflow:doctor',
+    'npm run pipelane:doctor',
   ],
   rollback: [
     'Roll back the last staging or production deploy to the most recent verified-good SHA.',
-    'npm run workflow:rollback',
+    'npm run pipelane:rollback',
   ],
   // `pipelane` shipped without a marker on main before this PR landed, so
   // existing consumers have a `.claude/commands/pipelane.md` we need to
@@ -142,14 +142,14 @@ function renderTemplate(template: string, config: WorkflowConfig): string {
   );
 }
 
-// Single source of truth for seeding a fresh CLAUDE.md from the workflow template.
+// Single source of truth for seeding a fresh CLAUDE.md from the Pipelane template.
 // Used by setupConsumerRepo (creating CLAUDE.md on first init) and handleConfigure
 // (seeding when a consumer ran init long ago and has since deleted CLAUDE.md).
 // Keeping this in docs.ts means any new {{TEMPLATE_VAR}} added to renderTemplate
 // above automatically flows through both callers — no parallel implementation to
 // keep in sync.
 export function renderClaudeMdFromTemplate(config: WorkflowConfig): string {
-  const rendered = renderTemplate(readTemplate('workflow/CLAUDE.template.md'), config);
+  const rendered = renderTemplate(readTemplate('pipelane/CLAUDE.template.md'), config);
   const emptySection = renderDeployConfigSection(emptyDeployConfig()).trimEnd();
   return rendered.replace('{{DEPLOY_CONFIG_SECTION}}', emptySection);
 }
@@ -224,7 +224,7 @@ function assertNoClaudeCollisions(commandsDir: string, desiredFiles: Set<string>
     const targetPath = path.join(commandsDir, entry);
     if (existsSync(targetPath) && !managedFiles.has(entry)) {
       throw new Error(
-        `Claude command alias collision: ${targetPath} already exists and is not managed by workflow-kit. Choose a different alias in .project-workflow.json or rename the conflicting command.`,
+        `Claude command alias collision: ${targetPath} already exists and is not managed by pipelane. Choose a different alias in .pipelane.json or rename the conflicting command.`,
       );
     }
   }
@@ -342,9 +342,6 @@ export function ensurePackageScripts(repoRoot: string): void {
     ? JSON.parse(readFileSync(targetPath, 'utf8')) as Record<string, unknown>
     : { name: path.basename(repoRoot), private: true, type: 'module', scripts: {} as Record<string, string> };
 
-  // Dual-name scripts: pipelane:* is canonical, workflow:* kept as a
-  // deprecation alias so existing muscle memory + Claude command files keep
-  // working through one release window after the rename.
   const scripts = {
     ...(typeof current.scripts === 'object' && current.scripts ? current.scripts as Record<string, string> : {}),
     'pipelane:setup': 'pipelane setup',
@@ -364,22 +361,6 @@ export function ensurePackageScripts(repoRoot: string): void {
     'pipelane:board': 'pipelane board',
     'pipelane:update': 'pipelane update',
     'pipelane:api': 'pipelane run api',
-    'workflow:api': 'pipelane run api',
-    'workflow:setup': 'pipelane setup',
-    'workflow:configure': 'pipelane configure',
-    'workflow:devmode': 'pipelane run devmode',
-    'workflow:new': 'pipelane run new',
-    'workflow:resume': 'pipelane run resume',
-    'workflow:pr': 'pipelane run pr',
-    'workflow:merge': 'pipelane run merge',
-    'workflow:release-check': 'pipelane run release-check',
-    'workflow:task-lock': 'pipelane run task-lock',
-    'workflow:deploy': 'pipelane run deploy',
-    'workflow:clean': 'pipelane run clean',
-    'workflow:status': 'pipelane run status',
-    'workflow:doctor': 'pipelane run doctor',
-    'workflow:rollback': 'pipelane run rollback',
-    'workflow:pipelane': 'pipelane board',
   };
 
   const next = {
@@ -390,12 +371,10 @@ export function ensurePackageScripts(repoRoot: string): void {
   writeFileSync(targetPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
 }
 
-// Generated slash-command templates and Codex wrappers all invoke
-// `npm run workflow:<cmd>`. If a consumer opts out of packageScripts but
-// keeps claudeCommands, the commands would reference npm scripts that
-// don't exist — slash commands fail silently post-setup. Catch the
-// inconsistency here with a clear error + escape hatches instead of
-// letting the user debug "why does /clean do nothing" at runtime.
+// Generated slash-command templates and Codex wrappers invoke
+// `npm run pipelane:<cmd>`. If a consumer opts out of packageScripts but
+// keeps claudeCommands, the generated command files would point at scripts
+// that do not exist. Catch that mismatch here instead of leaving a broken setup.
 function assertPackageScriptConsistency(repoRoot: string, syncDocs: Required<SyncDocsConfig>): void {
   if (syncDocs.packageScripts || !syncDocs.claudeCommands) {
     return;
@@ -406,11 +385,9 @@ function assertPackageScriptConsistency(repoRoot: string, syncDocs: Required<Syn
     ? (JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { scripts?: Record<string, string> })
     : {};
   const scripts = pkg.scripts ?? {};
-  // `workflow:configure` lives outside WORKFLOW_COMMANDS (it's a one-shot setup
-  // subcommand, not an operator action), but `devmode.md` references it as the
-  // remediation path when release mode blocks. A consumer that opts out of
-  // packageScripts needs it defined or they'll hit a broken pointer.
-  const required = [...WORKFLOW_COMMANDS.map((cmd) => `workflow:${cmd}`), 'workflow:configure'];
+  // `pipelane:configure` lives outside WORKFLOW_COMMANDS, but `devmode.md`
+  // references it as the remediation path when release mode blocks.
+  const required = [...WORKFLOW_COMMANDS.map((cmd) => `pipelane:${cmd}`), 'pipelane:configure'];
   const missing = required.filter((script) => typeof scripts[script] !== 'string');
   if (missing.length === 0) {
     return;
@@ -418,7 +395,7 @@ function assertPackageScriptConsistency(repoRoot: string, syncDocs: Required<Syn
 
   throw new Error(
     `syncDocs.packageScripts is false but package.json is missing required npm scripts: ${missing.join(', ')}. ` +
-      `The generated .claude/commands/*.md templates and Codex wrappers invoke these via \`npm run workflow:<cmd>\`. ` +
+      `The generated .claude/commands/*.md templates and Codex wrappers invoke these via \`npm run pipelane:<cmd>\`. ` +
       `Fix it one of three ways: ` +
       `(a) add the missing scripts to package.json yourself, ` +
       `(b) set syncDocs.packageScripts to true (or drop the flag), or ` +
@@ -482,11 +459,11 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
     saveManagedClaudeCommands(commandsDir, desiredCommandFiles);
   }
 
-  if (syncDocs.workflowClaudeTemplate) {
-    mkdirSync(path.join(repoRoot, 'workflow'), { recursive: true });
+  if (syncDocs.pipelaneClaudeTemplate) {
+    mkdirSync(path.join(repoRoot, 'pipelane'), { recursive: true });
     writeFileSync(
-      path.join(repoRoot, 'workflow', 'CLAUDE.template.md'),
-      renderTemplate(readTemplate('workflow/CLAUDE.template.md'), config),
+      path.join(repoRoot, 'pipelane', 'CLAUDE.template.md'),
+      renderTemplate(readTemplate('pipelane/CLAUDE.template.md'), config),
       'utf8',
     );
   }
@@ -505,7 +482,7 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
       path.join(repoRoot, 'README.md'),
       README_MARKER_START,
       README_MARKER_END,
-      renderTemplate(readTemplate('README.workflow-section.md'), config),
+      renderTemplate(readTemplate('README.pipelane-section.md'), config),
       `# ${config.displayName}\n\n`,
     );
   }
@@ -515,7 +492,7 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
       path.join(repoRoot, 'CONTRIBUTING.md'),
       CONTRIBUTING_MARKER_START,
       CONTRIBUTING_MARKER_END,
-      renderTemplate(readTemplate('CONTRIBUTING.workflow-section.md'), config),
+      renderTemplate(readTemplate('CONTRIBUTING.pipelane-section.md'), config),
       '# Contributing\n\n',
     );
   }
@@ -560,7 +537,7 @@ export function setupConsumerRepo(cwd: string): {
   const configPath = path.join(repoRoot, CONFIG_FILENAME);
 
   if (!existsSync(configPath)) {
-    throw new Error(`No ${CONFIG_FILENAME} found in ${repoRoot}. Run workflow-kit init first.`);
+    throw new Error(`No ${CONFIG_FILENAME} found in ${repoRoot}. Run pipelane bootstrap first.`);
   }
 
   const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as WorkflowConfig;

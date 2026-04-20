@@ -1,15 +1,15 @@
 # Dashboard Implementation Guide
 
-This folder contains `workflow-kit`'s local Pipelane Board reference implementation.
+This folder contains `pipelane`'s local Pipelane Board reference implementation.
 
 Files:
 
-- `server.ts`: local HTTP adapter over a target repo's `workflow:api`
+- `server.ts`: local HTTP adapter over a target repo's `pipelane:api`
 - `public/index.html`: zero-dependency dashboard UI
 
 ## Quick start
 
-From the `workflow-kit` repo:
+From the `pipelane` repo:
 
 ```bash
 npm run dashboard -- --repo /absolute/path/to/your/repo
@@ -23,11 +23,11 @@ http://127.0.0.1:3033
 
 The target repo must expose:
 
-- `npm run workflow:api -- snapshot --json`
-- `npm run workflow:api -- branch --branch <branch> --json`
-- `npm run workflow:api -- branch --branch <branch> --file <path> --patch --json`
-- `npm run workflow:api -- action <id> --json`
-- `npm run workflow:api -- action <id> --execute --confirm-token <token> --json`
+- `npm run pipelane:api -- snapshot --json`
+- `npm run pipelane:api -- branch --branch <branch> --json`
+- `npm run pipelane:api -- branch --branch <branch> --file <path> --patch --json`
+- `npm run pipelane:api -- action <id> --json`
+- `npm run pipelane:api -- action <id> --execute --confirm-token <token> --json`
 
 ## Architecture
 
@@ -37,7 +37,7 @@ The dashboard is a thin local adapter.
 
 `server.ts` is responsible for:
 
-- spawning `workflow:api` commands in the target repo
+- spawning `pipelane:api` commands in the target repo
 - forwarding JSON envelopes unchanged
 - caching snapshots briefly
 - managing action execution streams
@@ -74,14 +74,14 @@ The server exposes:
 Settings are stored per target repo in:
 
 ```text
-~/.workflow-kit/dashboard/<repo>-<hash>.json
+~/.pipelane/dashboard/<repo>-<hash>.json
 ```
 
 Current settings schema:
 
 ```json
 {
-  "boardTitle": "Rocketboard Pipelane",
+  "boardTitle": "Pipelane Board",
   "boardSubtitle": "Pipelane — the release cockpit for AI vibe coders. Branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.",
   "preferredPort": 3033,
   "autoRefreshSeconds": 30

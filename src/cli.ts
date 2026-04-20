@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { handlePipelane } from './dashboard/launcher.ts';
 import { getDashboardOptions, startDashboardServer } from './dashboard/server.ts';
+import { parseBootstrapArgs, runBootstrap } from './operator/bootstrap.ts';
+import { installClaudeBootstrapSkill } from './operator/claude-install.ts';
 import { installCodexWrappers } from './operator/codex-install.ts';
 import { handleConfigure } from './operator/commands/configure.ts';
 import { initConsumerRepo, setupConsumerRepo, syncDocsOnly } from './operator/docs.ts';
 import { runOperator } from './operator/index.ts';
+import { CONFIG_FILENAME, resolveRepoRoot, resolveWorkflowAliases, type WorkflowConfig } from './operator/state.ts';
 import { parseUpdateArgs, runUpdate } from './operator/update.ts';
 
 function valueAfter(args: string[], flag: string): string {
@@ -14,14 +20,15 @@ function valueAfter(args: string[], flag: string): string {
 }
 
 function printTopLevelHelp(): void {
-  process.stdout.write(`pipelane — release cockpit for AI vibe coders
-  (formerly workflow-kit; the \`workflow-kit\` bin still works as a shim)
+  process.stdout.write(`Pipelane — release cockpit for AI vibe coders
 
 Commands:
+  bootstrap [--project "Project Name"]
   init --project "Project Name"
   setup
   sync-docs
   configure [--json] [surface flags...]
+  install-claude
   install-codex
   update [--check] [--yes] [--json]
   dashboard [--repo <repo-root>] [--host <host>] [--port <port>]
@@ -29,10 +36,12 @@ Commands:
   run <operator command...>
 
 Examples:
+  pipelane bootstrap --project "My Project"
+  pipelane install-claude
   pipelane board
   pipelane board stop
   pipelane update --check
-  pipelane dashboard --repo /Users/josephkim/dev/rocketboard
+  pipelane dashboard --repo /absolute/path/to/repo
   pipelane run new --task "My Task"
 `);
 }
@@ -55,9 +64,28 @@ async function main(): Promise<void> {
     process.stdout.write([
       `Initialized pipelane in ${result.repoRoot}`,
       `Config: ${result.configPath}`,
-      'Commit the tracked workflow files before using pipelane:new from a remote-backed repo.',
+      'Commit the tracked Pipelane files before using pipelane:new from a remote-backed repo.',
       'Next: run npm run pipelane:setup',
       'Each Codex user must run setup locally on their own machine.',
+    ].join('\n') + '\n');
+    return;
+  }
+
+  if (command === 'bootstrap') {
+    const options = parseBootstrapArgs(rest);
+    const result = runBootstrap(process.cwd(), options);
+    process.stdout.write([
+      `Bootstrapped pipelane in ${result.repoRoot}`,
+      result.installedPackage ? 'Installed repo-local pipelane dependency.' : 'Reused existing repo-local pipelane dependency.',
+      result.initializedRepo
+        ? `Initialized tracked Pipelane files for ${result.displayName}.`
+        : 'Repo was already pipelane-enabled; refreshed local setup.',
+      result.createdClaude ? 'Created local CLAUDE.md from the Pipelane template.' : 'Preserved existing local CLAUDE.md.',
+      `Installed Codex wrappers in ${result.codexHome}`,
+      `Slash commands: ${result.installedWrappers.join(', ')}`,
+      'Commit the tracked Pipelane files before using pipelane:new from a remote-backed repo.',
+      'Claude picks up the tracked .claude/commands files after the repo is initialized.',
+      'If Codex was already open, reopen the repo or restart the client to refresh slash commands.',
     ].join('\n') + '\n');
     return;
   }
@@ -66,10 +94,10 @@ async function main(): Promise<void> {
     const result = setupConsumerRepo(process.cwd());
     process.stdout.write([
       `Pipelane setup complete in ${result.repoRoot}`,
-      result.createdClaude ? 'Created local CLAUDE.md from workflow template.' : 'Preserved existing local CLAUDE.md.',
+      result.createdClaude ? 'Created local CLAUDE.md from the Pipelane template.' : 'Preserved existing local CLAUDE.md.',
       `Installed Codex wrappers in ${result.codexHome}`,
       `Slash commands: ${result.installedWrappers.join(', ')}`,
-      'Each Codex user must run npm run workflow:setup on their own machine.',
+      'Each Codex user must run npm run pipelane:setup on their own machine.',
       'If Claude or Codex was already open, reopen the repo or restart the client to refresh slash commands.',
       'Release mode still requires local deploy configuration in CLAUDE.md.',
     ].join('\n') + '\n');
@@ -94,8 +122,21 @@ async function main(): Promise<void> {
   }
 
   if (command === 'install-codex') {
-    const result = installCodexWrappers({ repoRoot: process.cwd() });
+    const repoRoot = resolveRepoRoot(process.cwd(), true);
+    const configPath = path.join(repoRoot, CONFIG_FILENAME);
+    const config = existsSync(configPath)
+      ? JSON.parse(readFileSync(configPath, 'utf8')) as WorkflowConfig
+      : null;
+    const result = config
+      ? installCodexWrappers({ repoRoot, aliases: resolveWorkflowAliases(config.aliases) })
+      : installCodexWrappers();
     process.stdout.write(`Installed Codex wrappers in ${result.codexHome}: ${result.installed.join(', ')}\n`);
+    return;
+  }
+
+  if (command === 'install-claude') {
+    const result = installClaudeBootstrapSkill();
+    process.stdout.write(`Installed Claude skills in ${result.claudeHome}: ${result.installed.join(', ')}\n`);
     return;
   }
 
@@ -105,10 +146,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // `board` is the canonical subcommand that opens the Pipelane Board.
-  // `pipelane` is kept as a legacy alias so the old `workflow-kit pipelane`
-  // muscle memory keeps working through the `workflow-kit` bin shim.
-  if (command === 'board' || command === 'pipelane') {
+  if (command === 'board') {
     await handlePipelane(rest, process.cwd());
     return;
   }

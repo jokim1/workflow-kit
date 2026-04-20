@@ -1,4 +1,4 @@
-<!-- workflow-kit:command:pipelane -->
+<!-- pipelane:command:pipelane -->
 Run a Pipelane subcommand for this repo.
 
 ## Subcommand routing
@@ -38,7 +38,7 @@ This command:
 4. On confirm, runs `npm install pipelane@github:jokim1/pipelane#main` in the consumer repo.
 5. Reports the new installed commit.
 
-After an upgrade, remember that `.project-workflow.json` alias changes require rerunning `npm run pipelane:setup` so Claude/Codex pick up renamed commands.
+After an upgrade, remember that `.pipelane.json` alias changes require rerunning `npm run pipelane:setup` so Claude/Codex pick up renamed commands.
 
 ## Pipelane Board (default)
 
@@ -62,7 +62,7 @@ Options:
 - `--port <n>` — override the port for this invocation.
 - `--repo <path>` — point at a different repo (default: cwd).
 
-State lives under `~/.workflow-kit/dashboard/` (path retained across the workflow-kit → pipelane rename; a `~/.pipelane/dashboard/` migration ships in a follow-up release):
+State lives under `~/.pipelane/dashboard/`:
 
 - `pids/<slug>-<hash>.pid` — PID of the background dashboard
 - `logs/<slug>-<hash>.log` — dashboard stdout/stderr
@@ -70,5 +70,5 @@ State lives under `~/.workflow-kit/dashboard/` (path retained across the workflo
 
 Display the command output directly. If the dashboard failed to become healthy within 8s, surface the log path so the operator can inspect what went wrong.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

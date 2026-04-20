@@ -13,11 +13,11 @@ interface HealthResult {
 }
 
 function pidDir(): string {
-  return path.join(os.homedir(), '.workflow-kit', 'dashboard', 'pids');
+  return path.join(os.homedir(), '.pipelane', 'dashboard', 'pids');
 }
 
 function logDir(): string {
-  return path.join(os.homedir(), '.workflow-kit', 'dashboard', 'logs');
+  return path.join(os.homedir(), '.pipelane', 'dashboard', 'logs');
 }
 
 function slugHash(repoRoot: string): string {
@@ -226,7 +226,7 @@ async function runStart(argv: string[], cwd: string): Promise<void> {
   if (!healthy) {
     process.stdout.write(
       `Dashboard did not become healthy within 8s. See logs: ${logPath}\n`
-        + `PID ${child.pid ?? 'unknown'} may still be starting; retry \`workflow-kit pipelane\` shortly.\n`,
+        + `PID ${child.pid ?? 'unknown'} may still be starting; retry \`pipelane board\` shortly.\n`,
     );
     process.exitCode = 1;
     return;
@@ -308,7 +308,7 @@ export async function handlePipelane(argv: string[], cwd: string): Promise<void>
   if (sub === 'help' || sub === '--help' || sub === '-h') {
     process.stdout.write(
       [
-        'Usage: workflow-kit pipelane [subcommand] [options]',
+        'Usage: pipelane board [subcommand] [options]',
         '',
         'Subcommands:',
         '  (default)   start Pipelane Board (idempotent) and open the browser',

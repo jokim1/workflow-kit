@@ -101,7 +101,7 @@ function defaultDashboardSettings(repoRoot: string): DashboardSettings {
 function dashboardSettingsPath(repoRoot: string): string {
   const slug = repoDashboardSlug(repoRoot);
   const hash = createHash('sha1').update(path.resolve(repoRoot)).digest('hex').slice(0, 8);
-  return path.join(os.homedir(), '.workflow-kit', 'dashboard', `${slug}-${hash}.json`);
+  return path.join(os.homedir(), '.pipelane', 'dashboard', `${slug}-${hash}.json`);
 }
 
 function readDashboardSettings(repoRoot: string, settingsPath = dashboardSettingsPath(repoRoot)): DashboardSettings {
@@ -225,7 +225,7 @@ function sendText(res: ServerResponse, statusCode: number, body: string, content
 function buildTransportFailure(message: string, stderr = '', details = ''): JsonObject {
   return {
     ok: false,
-    error: 'workflow_api_transport_failure',
+    error: 'pipelane_api_transport_failure',
     message,
     stderr,
     details,
@@ -245,14 +245,14 @@ function readRepoPackageJson(repoRoot: string): JsonObject | null {
   }
 }
 
-function workflowApiConfigured(repoRoot: string): boolean {
+function pipelaneApiConfigured(repoRoot: string): boolean {
   const packageJson = readRepoPackageJson(repoRoot);
   const scripts = packageJson?.scripts;
   if (!scripts || typeof scripts !== 'object') {
     return false;
   }
 
-  return typeof (scripts as Record<string, unknown>)['workflow:api'] === 'string';
+  return typeof (scripts as Record<string, unknown>)['pipelane:api'] === 'string';
 }
 
 function readBranchAuthors(repoRoot: string): Map<string, BranchAuthor> {
@@ -338,7 +338,7 @@ function enrichEnvelopeWithBranchAuthors(envelope: JsonObject, authors: Map<stri
 
 async function runWorkflowJson(repoRoot: string, args: string[]): Promise<{ status: number; envelope: JsonObject; stderr: string }> {
   const result = await new Promise<{ status: number; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn('npm', ['run', '--silent', 'workflow:api', '--', ...args], {
+    const child = spawn('npm', ['run', '--silent', 'pipelane:api', '--', ...args], {
       cwd: repoRoot,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -365,7 +365,7 @@ async function runWorkflowJson(repoRoot: string, args: string[]): Promise<{ stat
 
   const trimmed = result.stdout.trim();
   if (!trimmed) {
-    throw new Error(`workflow:api produced no JSON output.${result.stderr ? ` stderr: ${result.stderr.trim()}` : ''}`);
+    throw new Error(`pipelane:api produced no JSON output.${result.stderr ? ` stderr: ${result.stderr.trim()}` : ''}`);
   }
 
   try {
@@ -377,7 +377,7 @@ async function runWorkflowJson(repoRoot: string, args: string[]): Promise<{ stat
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`workflow:api returned invalid JSON (${message}).`);
+    throw new Error(`pipelane:api returned invalid JSON (${message}).`);
   }
 }
 
@@ -530,7 +530,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
     const args = [
       'run',
       '--silent',
-      'workflow:api',
+      'pipelane:api',
       '--',
       'action',
       actionId,
@@ -583,7 +583,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
       const trimmedStdout = record.stdout.trim();
       if (!trimmedStdout) {
         record.status = 'failed';
-        record.errorMessage = 'workflow:api execute produced no JSON output.';
+        record.errorMessage = 'pipelane:api execute produced no JSON output.';
         appendExecutionEvent(record, {
           type: 'error',
           at: record.completedAt,
@@ -611,7 +611,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         record.status = 'failed';
-        record.errorMessage = `workflow:api execute returned invalid JSON (${message}).`;
+        record.errorMessage = `pipelane:api execute returned invalid JSON (${message}).`;
         appendExecutionEvent(record, {
           type: 'stdout',
           at: record.completedAt,
@@ -656,7 +656,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
           ok: true,
           repoRoot: options.repoRoot,
           repoExists: existsSync(options.repoRoot),
-          workflowApiConfigured: workflowApiConfigured(options.repoRoot),
+          pipelaneApiConfigured: pipelaneApiConfigured(options.repoRoot),
           uiFileExists: existsSync(uiFilePath),
           settingsPath: options.settingsPath,
           checkedAt: new Date().toISOString(),
@@ -705,7 +705,7 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
           sendJson(res, 200, envelope);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          sendJson(res, 502, buildTransportFailure('Could not load workflow snapshot.', '', message));
+          sendJson(res, 502, buildTransportFailure('Could not load Pipelane snapshot.', '', message));
         }
         return;
       }

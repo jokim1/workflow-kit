@@ -14,13 +14,13 @@ The board is:
 - local-first
 - developer-facing
 - intentionally opinionated
-- an adapter over a repo's public `workflow:api` contract
+- an adapter over a repo's public `pipelane:api` contract
 
 The board is **not**:
 
 - the workflow source of truth
 - a project management board
-- a replacement for repo-native `npm run workflow:*` commands
+- a replacement for repo-native `npm run pipelane:*` commands
 - a place to re-infer state from git internals, `gh` output, or private files
 
 ## Design principles
@@ -142,7 +142,7 @@ Recommended pattern:
 Board settings are stored per target repo in:
 
 ```text
-~/.workflow-kit/dashboard/<repo>-<hash>.json
+~/.pipelane/dashboard/<repo>-<hash>.json
 ```
 
 The reference implementation exposes a Settings drawer for:
@@ -159,7 +159,7 @@ repo churn.
 
 If you build a variant on top of this design, preserve these boundaries:
 
-- consume the repo's public `workflow:api` contract
+- consume the repo's public `pipelane:api` contract
 - do not read private workflow files directly
 - keep action semantics in the repo contract, not in the UI
 - keep the board local and customizable

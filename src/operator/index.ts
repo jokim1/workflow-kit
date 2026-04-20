@@ -117,20 +117,22 @@ export async function runOperator(cwd: string, argv: string[]): Promise<void> {
     return;
   }
 
-  throw new Error(`Unknown workflow command "${command}".`);
+  throw new Error(`Unknown Pipelane command "${command}".`);
 }
 
 function printUsage(): void {
-  process.stdout.write(`workflow-kit
+  process.stdout.write(`pipelane
 
 Usage:
-  workflow-kit init --project "Project Name"
-  workflow-kit setup
-  workflow-kit run <command> [args...]
-  workflow-kit sync-docs
-  workflow-kit install-codex
+  pipelane bootstrap --project "Project Name"
+  pipelane init --project "Project Name"
+  pipelane setup
+  pipelane run <command> [args...]
+  pipelane sync-docs
+  pipelane install-claude
+  pipelane install-codex
 
-Workflow commands:
+Pipelane commands:
   devmode
   new
   resume
@@ -144,5 +146,7 @@ Workflow commands:
   doctor [--probe | --fix]
   rollback <staging|prod> [--surfaces ...] [--revert-pr]
   api snapshot
+  api branch --branch <branch>
+  api branch --branch <branch> --patch --file <path> [--scope branch|workspace]
 `);
 }

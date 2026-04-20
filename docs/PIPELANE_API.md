@@ -1,15 +1,17 @@
-# `workflow:api` — Pipelane operator contract
+# `pipelane:api` — Pipelane operator contract
 
 This is the machine-readable surface every Pipelane consumer (CLI `/status`,
 the Pipelane Board, editor integrations, dashboards) reads from. It is the
 **single source of truth** for workflow state — slash commands, the web
 board, and the terminal cockpit all derive from the same envelope.
 
-Two commands:
+Four commands:
 
 ```bash
-npm run workflow:api -- snapshot [--json]
-npm run workflow:api -- action <actionId> [--execute] [--confirm-token <t>] [--json]
+npm run pipelane:api -- snapshot [--json]
+npm run pipelane:api -- branch --branch <branch> [--json]
+npm run pipelane:api -- branch --branch <branch> --patch --file <path> [--scope branch|workspace] [--json]
+npm run pipelane:api -- action <actionId> [--execute] [--confirm-token <t>] [--json]
 ```
 
 `--json` is assumed by programmatic callers; human-facing renderers also
@@ -20,8 +22,8 @@ accept `--text`. Every response is an `ApiEnvelope` (see below).
 ```jsonc
 {
   "schemaVersion": "2026-04-18",
-  // command is "workflow.api.snapshot" or "workflow.api.action"
-  "command": "workflow.api.snapshot",
+  // command is "pipelane.api.snapshot" or "pipelane.api.action"
+  "command": "pipelane.api.snapshot",
   "ok": true,
   "message": "",
   "warnings": [],
@@ -74,6 +76,25 @@ that ignore unknown fields parse every revision transparently. See
 - `availableActions[]` — unblocked actions for the active branch.
 - `branches[]` — per-branch rows with `lanes.{local,pr,base,staging,production}`.
 
+## `branch` data
+
+`branch --branch <name>` returns the selected `BranchRow` plus lazy-loaded file
+lists for the committed branch diff and the live workspace diff:
+
+- `data.branch` — the same branch row shape returned in `snapshot`.
+- `data.branchFiles[]` — committed diff against the configured base branch.
+- `data.workspaceFiles[]` — working tree diff against `HEAD`, plus untracked files.
+- `data.counts` — file list counts for both scopes.
+
+`branch --patch` returns a single patch preview:
+
+- `data.branch` — branch name
+- `data.path` — requested file path
+- `data.scope` — `branch` or `workspace`
+- `data.patch` — unified diff text when available
+- `data.truncated` — whether the preview hit the size cap
+- `data.reason` — explanation when the patch is unavailable
+
 ## `action` data — the action registry
 
 Every mutating workflow step is exposed as a stable action ID. Callers
@@ -105,12 +126,11 @@ in one call.
 
 `doctor.fix` is intentionally **not** exposed as an API action — it is
 interactive (TTY prompts for platform + URLs) and lives behind
-`npm run workflow:doctor -- --fix`. Scripted config goes through
+`npm run pipelane:doctor -- --fix`. Scripted config goes through
 `pipelane configure --json=...` instead.
 
-`rollback.*` are **Pipelane-only** extensions above the shared
-Rocketboard-compatible baseline — a Rocketboard-only client won't
-recognize them. Both actions take `{ task, surfaces }` as
+`rollback.*` are **Pipelane-only** extensions above the base action set.
+Both actions take `{ task, surfaces }` as
 `normalizedInputs`. Target SHA resolves server-side from the deploy
 state: the most recent `status=succeeded, verification.statusCode<300`
 record for the (environment, surfaces) pair, excluding the currently
@@ -121,7 +141,7 @@ board/CI shell needs conflict handling that lives behind the TTY today.
 
 ## `probe-state.json` (v1.2)
 
-Location: `<commonDir>/workflow-kit-state/probe-state.json`.
+Location: `<commonDir>/pipelane-state/probe-state.json`.
 
 Written by `doctor.probe` and `doctor.fix` (which runs a probe after
 updating the deploy-config block). Read by the release gate as a
@@ -197,7 +217,7 @@ below).
   flag-shaped arg (`--json`, `-x`) errors instead of silently
   swallowing it.
 
-### `.project-workflow.json:surfacePathMap` (optional, v1.4+)
+### `.pipelane.json:surfacePathMap` (optional, v1.4+)
 
 Opt-in map consumed by `--blast`. Keys are surface names (typically
 entries from `surfaces`), values are POSIX directory prefixes or exact

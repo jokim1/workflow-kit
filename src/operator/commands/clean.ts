@@ -79,8 +79,8 @@ export async function handleClean(cwd: string, parsed: ParsedOperatorArgs): Prom
   if (activeLocks.length > 0) {
     lines.push(...activeLocks.map((lock) => `- ${lock.taskName || lock.taskSlug}: ${lock.branchName} @ ${lock.worktreePath}`));
   }
-  lines.push('Run workflow:clean -- --apply --all-stale to prune every stale task lock,');
-  lines.push('or workflow:clean -- --apply --task <slug> to prune one.');
+  lines.push('Run pipelane:clean -- --apply --all-stale to prune every stale task lock,');
+  lines.push('or pipelane:clean -- --apply --task <slug> to prune one.');
 
   printResult(parsed.flags, { message: lines.join('\n') });
 }

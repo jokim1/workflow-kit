@@ -16,19 +16,19 @@ import {
 } from '../state.ts';
 import { renderLaneLine, renderStateGlyph, sanitizeForTerminal } from './helpers.ts';
 
-// v0.6: `/status` terminal cockpit. Shells out to workflow:api snapshot
+// v0.6: `/status` terminal cockpit. Shells out to pipelane:api snapshot
 // via the in-process `buildWorkflowApiSnapshot` builder — same envelope
 // the Pipelane Board consumes, so there's one rendering of truth per
 // lane state. Zero derivation drift by construction.
 //
 // Shape of this handler:
-// 1. Build the envelope (same code path as `workflow:api snapshot`).
+// 1. Build the envelope (same code path as `pipelane:api snapshot`).
 // 2. If envelope.ok is false, print the envelope error verbatim and
 //    exit non-zero — no silent fallback to raw pr-state.json / etc.
 // 3. Otherwise render the cockpit via renderCockpit(envelope) and print.
 //
 // Tests exercise renderCockpit directly with a fixture envelope (see
-// the golden-file case in test/workflow-kit.test.mjs).
+// the golden-file case in test/pipelane.test.mjs).
 //
 // v1.4 extensions: --week / --stuck / --blast are alternate views on the
 // same underlying state. They read DeployRecord + TaskLock + git diff
@@ -81,11 +81,11 @@ export async function handleStatus(cwd: string, parsed: ParsedOperatorArgs): Pro
   } catch (error) {
     // Fail loud. Never silently read raw state files.
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`workflow:api snapshot failed: ${message}`);
+    throw new Error(`pipelane:api snapshot failed: ${message}`);
   }
 
   if (!envelope.ok) {
-    throw new Error(envelope.message || 'workflow:api snapshot returned ok=false');
+    throw new Error(envelope.message || 'pipelane:api snapshot returned ok=false');
   }
 
   if (json) {
@@ -148,11 +148,11 @@ export function renderCockpit(
   const probeState = boardContext.releaseReadiness?.probeState;
   if (probeState === 'degraded') {
     lines.push(colorize('⚠ DEPLOY PROBE DEGRADED', color, 'red'));
-    lines.push('  run `workflow:doctor --probe` to re-probe staging surfaces.');
+    lines.push('  run `pipelane:doctor --probe` to re-probe staging surfaces.');
     lines.push('');
   } else if (probeState === 'stale') {
     lines.push(colorize('ℹ DEPLOY PROBE STALE', color, 'yellow'));
-    lines.push('  last probe is >24h old. Run `workflow:doctor --probe` to refresh.');
+    lines.push('  last probe is >24h old. Run `pipelane:doctor --probe` to refresh.');
     lines.push('');
   }
 
@@ -805,7 +805,7 @@ export function buildBlastView(
 
   const hint =
     Object.keys(map).length === 0
-      ? 'configure `surfacePathMap` in .project-workflow.json to group these files by surface.'
+      ? 'configure `surfacePathMap` in .pipelane.json to group these files by surface.'
       : null;
 
   return {

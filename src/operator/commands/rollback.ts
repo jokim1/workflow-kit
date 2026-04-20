@@ -435,7 +435,7 @@ export async function handleRollback(cwd: string, parsed: ParsedOperatorArgs): P
         ? `Healthcheck: ${verification.healthcheckUrl} → HTTP ${verification.statusCode} in ${verification.latencyMs}ms (${verification.probes} probe(s))`
         : 'Healthcheck: skipped (no URL configured)',
       environment === 'prod'
-        ? 'Next: investigate the failing change and open a revert PR if needed (workflow:rollback -- prod --revert-pr).'
+        ? 'Next: investigate the failing change and open a revert PR if needed (pipelane:rollback -- prod --revert-pr).'
         : 'Next: validate staging, then decide whether to promote to prod or open a revert PR.',
     ].filter(Boolean).join('\n'),
   });
@@ -452,7 +452,7 @@ async function handleRevertPr(
 ): Promise<void> {
   const context = resolveWorkflowContext(cwd);
   if (context.modeState.mode !== 'release') {
-    throw new Error('--revert-pr is release-mode only. Switch modes with workflow:devmode -- release first.');
+    throw new Error('--revert-pr is release-mode only. Switch modes with pipelane:devmode -- release first.');
   }
 
   // Refuse to operate against a dirty worktree — we're about to `switch`

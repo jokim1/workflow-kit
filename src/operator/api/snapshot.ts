@@ -180,7 +180,7 @@ export function buildWorkflowApiSnapshot(cwd: string): ApiEnvelope<SnapshotData>
     attention.push(buildApiIssue({
       code: entry.result.state === 'degraded' ? 'probe.degraded' : 'probe.stale',
       severity: entry.result.state === 'degraded' ? 'error' : 'warning',
-      message: `staging ${entry.surface} probe ${entry.result.state}: ${entry.result.reason}. Run \`workflow:doctor --probe\`.`,
+      message: `staging ${entry.surface} probe ${entry.result.state}: ${entry.result.reason}. Run \`pipelane:doctor --probe\`.`,
       source: 'probeState',
       blocking: true,
       lane: 'staging',
@@ -193,9 +193,9 @@ export function buildWorkflowApiSnapshot(cwd: string): ApiEnvelope<SnapshotData>
     : 'Build mode: production deploys run automatically after merge.';
 
   return buildApiEnvelope<SnapshotData>({
-    command: 'workflow.api.snapshot',
+    command: 'pipelane.api.snapshot',
     ok: true,
-    message: 'pipelane workflow snapshot ready',
+    message: 'pipelane API snapshot ready',
     data: {
       boardContext: {
         mode,

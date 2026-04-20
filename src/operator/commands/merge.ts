@@ -10,7 +10,7 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
   const branchName = runGit(context.repoRoot, ['branch', '--show-current']) ?? '';
   const pr = loadPrForBranch(context.repoRoot, branchName);
   if (!pr) {
-    throw new Error(`No pull request found for branch ${branchName}. Run workflow:pr first.`);
+    throw new Error(`No pull request found for branch ${branchName}. Run pipelane:pr first.`);
   }
 
   watchPrChecks(context.repoRoot, pr.number);
@@ -54,14 +54,14 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
     } else if (deploy.workflowRunId) {
       lines.push(`Workflow run: ${deploy.workflowRunId}`);
     }
-    lines.push('Next: verify production, then run workflow:clean.');
+    lines.push('Next: verify production, then run pipelane:clean.');
   } else if (context.modeState.mode === 'build') {
     setNextAction(context.commonDir, context.config, taskSlug, `merged at ${shortSha}, deploy to prod`);
     lines.push('Build mode auto-deploy is disabled for this repo.');
-    lines.push('Next: run workflow:deploy -- prod.');
+    lines.push('Next: run pipelane:deploy -- prod.');
   } else {
     setNextAction(context.commonDir, context.config, taskSlug, `merged at ${shortSha}, deploy to staging`);
-    lines.push('Next: run workflow:deploy -- staging.');
+    lines.push('Next: run pipelane:deploy -- staging.');
   }
 
   printResult(parsed.flags, {

@@ -1,21 +1,21 @@
-<!-- workflow-kit:command:status -->
-Render a one-screen terminal cockpit of the workflow:api snapshot.
+<!-- pipelane:command:status -->
+Render a one-screen terminal cockpit of the pipelane:api snapshot.
 
 Run:
 
 ```bash
-npm run workflow:status
+npm run pipelane:status
 ```
 
 For machine-readable output (same envelope the Pipelane Board consumes):
 
 ```bash
-npm run workflow:status -- --json
+npm run pipelane:status -- --json
 ```
 
 Rules:
 
-- `/status` is a pure renderer of `workflow:api snapshot --json` — zero
+- `/status` is a pure renderer of `pipelane:api snapshot --json` — zero
   derivation drift with the Pipelane Board.
 - If the snapshot call fails, `/status` prints the envelope error verbatim.
   It never silently falls back to raw state files.
@@ -23,5 +23,5 @@ Rules:
   `awaiting_preflight`, `stale`, `degraded`, `blocked`, `unknown`,
   `bypassed`). Colors degrade cleanly on non-TTY output.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

@@ -1,16 +1,16 @@
-<!-- workflow-kit:command:resume -->
+<!-- pipelane:command:resume -->
 Resume an existing task workspace for this repo.
 
 Run:
 
 ```bash
-npm run workflow:resume -- $ARGUMENTS
+npm run pipelane:resume -- $ARGUMENTS
 ```
 
 Common forms:
 
-- `npm run workflow:resume -- --task "task name"`
-- `npm run workflow:resume`
+- `npm run pipelane:resume -- --task "task name"`
+- `npm run pipelane:resume`
 
 Behavior:
 
@@ -20,5 +20,5 @@ Behavior:
 
 Display the output directly. Call out that the chat/workspace has not moved automatically yet.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

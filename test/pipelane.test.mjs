@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 const KIT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI_PATH = path.join(KIT_ROOT, 'src', 'cli.ts');
 const FIXTURE_ROOT = path.join(KIT_ROOT, 'test', 'fixtures', 'sample-repo');
+const DEFAULT_CODEX_HOME = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-global-'));
+const LOCAL_PIPELANE_INSTALL_SPEC = `file:${KIT_ROOT}`;
 
 // Mark this process + every child spawn as a test run. Production-gated test
 // hooks (PIPELANE_DEPLOY_PROD_CONFIRM_STUB, PIPELANE_CLEAN_MIN_AGE_MS) only
@@ -31,7 +33,7 @@ function run(command, args, cwd, env = {}) {
 function runCli(args, cwd, env = {}, allowFailure = false) {
   const result = spawnSync('node', [CLI_PATH, ...args], {
     cwd,
-    env: { ...process.env, ...env },
+    env: { ...process.env, CODEX_HOME: DEFAULT_CODEX_HOME, ...env },
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -44,7 +46,7 @@ function runCli(args, cwd, env = {}, allowFailure = false) {
 }
 
 function createRepo() {
-  const repoRoot = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-repo-'));
+  const repoRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-repo-'));
   cpSync(FIXTURE_ROOT, repoRoot, { recursive: true });
   execFileSync('git', ['init', '-b', 'main'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
   execFileSync('git', ['config', 'user.email', 'codex@example.com'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -56,7 +58,7 @@ function createRepo() {
 
 function createRemoteBackedRepo() {
   const repoRoot = createRepo();
-  const remoteRoot = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-remote-'));
+  const remoteRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-remote-'));
   execFileSync('git', ['init', '--bare', remoteRoot], { stdio: ['ignore', 'pipe', 'pipe'] });
   execFileSync('git', ['remote', 'add', 'origin', remoteRoot], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
   execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -279,7 +281,7 @@ function setWorkflowApiScript(repoRoot) {
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
   packageJson.scripts = {
     ...(packageJson.scripts || {}),
-    'workflow:api': 'node fake-workflow-api.js',
+    'pipelane:api': 'node fake-workflow-api.js',
   };
   writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n', 'utf8');
 }
@@ -367,7 +369,7 @@ function makeDashboardFixture() {
   return {
     snapshot: {
       schemaVersion: '2026-04-14',
-      command: 'workflow.api.snapshot',
+      command: 'pipelane.api.snapshot',
       ok: true,
       message: 'workflow operator snapshot ready',
       warnings: [],
@@ -436,7 +438,7 @@ function makeDashboardFixture() {
       'codex/pipeline-board-1234': {
         details: {
           schemaVersion: '2026-04-14',
-          command: 'workflow.api.branch',
+          command: 'pipelane.api.branch',
           ok: true,
           message: 'branch details ready for codex/pipeline-board-1234',
           warnings: [],
@@ -486,7 +488,7 @@ function makeDashboardFixture() {
         patches: {
           'branch:src/dashboard.ts': {
             schemaVersion: '2026-04-14',
-            command: 'workflow.api.branch.patch',
+            command: 'pipelane.api.branch.patch',
             ok: true,
             message: 'patch preview ready for src/dashboard.ts',
             warnings: [],
@@ -502,7 +504,7 @@ function makeDashboardFixture() {
           },
           'workspace:README.md': {
             schemaVersion: '2026-04-14',
-            command: 'workflow.api.branch.patch',
+            command: 'pipelane.api.branch.patch',
             ok: true,
             message: 'patch preview ready for README.md',
             warnings: [],
@@ -523,7 +525,7 @@ function makeDashboardFixture() {
       'deploy.staging': {
         preflight: {
           schemaVersion: '2026-04-14',
-          command: 'workflow.api.action',
+          command: 'pipelane.api.action',
           ok: true,
           message: 'preflight ready',
           warnings: [],
@@ -551,7 +553,7 @@ function makeDashboardFixture() {
         },
         execute: {
           schemaVersion: '2026-04-14',
-          command: 'workflow.api.action',
+          command: 'pipelane.api.action',
           ok: true,
           message: 'staging deploy started',
           warnings: [],
@@ -575,7 +577,7 @@ function makeDashboardFixture() {
       'deploy.prod': {
         preflight: {
           schemaVersion: '2026-04-14',
-          command: 'workflow.api.action',
+          command: 'pipelane.api.action',
           ok: false,
           message: 'confirmation required',
           warnings: [],
@@ -606,7 +608,7 @@ function makeDashboardFixture() {
         preflightExitCode: 1,
         execute: {
           schemaVersion: '2026-04-14',
-          command: 'workflow.api.action',
+          command: 'pipelane.api.action',
           ok: true,
           message: 'production deploy started',
           warnings: [],
@@ -631,20 +633,20 @@ function makeDashboardFixture() {
   };
 }
 
-test('init writes tracked workflow files and setup seeds CLAUDE plus Codex wrappers', () => {
+test('init writes tracked Pipelane files and setup seeds CLAUDE plus Codex wrappers', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     const initResult = runCli(['init', '--project', 'Demo App'], repoRoot);
     assert.match(initResult.stdout, /Initialized pipelane/);
-    assert.ok(existsSync(path.join(repoRoot, '.project-workflow.json')));
+    assert.ok(existsSync(path.join(repoRoot, '.pipelane.json')));
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'new.md')));
     assert.ok(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')));
 
     const setupResult = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
     assert.match(setupResult.stdout, /[Pp]ipelane setup complete/);
-    assert.match(setupResult.stdout, /Each Codex user must run npm run workflow:setup/);
+    assert.match(setupResult.stdout, /Each Codex user must run npm run pipelane:setup/);
     assert.ok(existsSync(path.join(repoRoot, 'CLAUDE.md')));
     assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
 
@@ -655,17 +657,111 @@ test('init writes tracked workflow files and setup seeds CLAUDE plus Codex wrapp
     assert.equal(packageJson.scripts['pipelane:board'], 'pipelane board');
     // Deprecation aliases for one release window — keep working through
     // the rename so existing Claude slash commands don't break.
-    assert.equal(packageJson.scripts['workflow:new'], 'pipelane run new');
-    assert.equal(packageJson.scripts['workflow:resume'], 'pipelane run resume');
+    assert.equal(packageJson.scripts['pipelane:new'], 'pipelane run new');
+    assert.equal(packageJson.scripts['pipelane:resume'], 'pipelane run resume');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
   }
 });
 
+test('bootstrap installs pipelane, initializes the repo, and seeds the global bootstrap skill', () => {
+  const repoRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-bootstrap-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+
+  try {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+
+    const result = runCli(
+      ['bootstrap', '--project', 'Demo App'],
+      repoRoot,
+      { CODEX_HOME: codexHome, PIPELANE_INSTALL_SPEC: LOCAL_PIPELANE_INSTALL_SPEC },
+    );
+
+    assert.match(result.stdout, /Bootstrapped pipelane/);
+    assert.match(result.stdout, /Installed repo-local pipelane dependency/);
+    assert.match(result.stdout, /Initialized tracked Pipelane files for Demo App/);
+    assert.match(result.stdout, /Slash commands: .*\/init-pipelane.*\/new/);
+    assert.ok(existsSync(path.join(repoRoot, '.pipelane.json')));
+    assert.ok(existsSync(path.join(repoRoot, 'CLAUDE.md')));
+    assert.ok(existsSync(path.join(repoRoot, 'node_modules', 'pipelane', 'package.json')));
+    assert.ok(existsSync(path.join(codexHome, 'skills', 'init-pipelane', 'SKILL.md')));
+    assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
+
+    const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+    assert.equal(typeof packageJson.devDependencies.pipelane, 'string');
+    assert.equal(packageJson.scripts['pipelane:new'], 'pipelane run new');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('install-codex outside a pipelane repo installs only the global init-pipelane skill', () => {
+  const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-install-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+
+  try {
+    const result = runCli(['install-codex'], workspaceRoot, { CODEX_HOME: codexHome });
+    assert.match(result.stdout, /\/init-pipelane/);
+    assert.ok(existsSync(path.join(codexHome, 'skills', 'init-pipelane', 'SKILL.md')));
+    assert.equal(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')), false);
+    assert.ok(existsSync(path.join(codexHome, 'skills', '.pipelane', 'bin', 'pipelane')));
+    assert.match(
+      readFileSync(path.join(codexHome, 'skills', '.pipelane', 'bin', 'bootstrap-pipelane.sh'), 'utf8'),
+      new RegExp(path.join(codexHome, 'skills', '.pipelane', 'bin', 'pipelane').replaceAll('\\', '\\\\')),
+    );
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('install-claude outside a pipelane repo installs the global init-pipelane skill and managed runtime', () => {
+  const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-install-claude-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+
+  try {
+    const result = runCli(['install-claude'], workspaceRoot, { CLAUDE_HOME: claudeHome });
+    assert.match(result.stdout, /\/init-pipelane/);
+    assert.ok(existsSync(path.join(claudeHome, 'skills', 'pipelane', 'bin', 'pipelane')));
+    assert.ok(existsSync(path.join(claudeHome, 'skills', 'pipelane', 'init-pipelane', 'SKILL.md')));
+    assert.ok(existsSync(path.join(claudeHome, 'skills', 'init-pipelane', 'SKILL.md')));
+    assert.equal(
+      realpathSync(path.join(claudeHome, 'skills', 'init-pipelane', 'SKILL.md')),
+      realpathSync(path.join(claudeHome, 'skills', 'pipelane', 'init-pipelane', 'SKILL.md')),
+    );
+    assert.match(
+      readFileSync(path.join(claudeHome, 'skills', 'pipelane', 'bin', 'bootstrap-pipelane.sh'), 'utf8'),
+      new RegExp(path.join(claudeHome, 'skills', 'pipelane', 'bin', 'pipelane').replaceAll('\\', '\\\\')),
+    );
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+  }
+});
+
+test('install-claude fails closed when init-pipelane already exists as an unrelated Claude skill', () => {
+  const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-install-claude-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+
+  try {
+    mkdirSync(path.join(claudeHome, 'skills', 'init-pipelane'), { recursive: true });
+    writeFileSync(path.join(claudeHome, 'skills', 'init-pipelane', 'SKILL.md'), 'custom claude skill\n', 'utf8');
+
+    const result = runCli(['install-claude'], workspaceRoot, { CLAUDE_HOME: claudeHome }, true);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Claude skill alias collision/);
+    assert.equal(readFileSync(path.join(claudeHome, 'skills', 'init-pipelane', 'SKILL.md'), 'utf8'), 'custom claude skill\n');
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+  }
+});
+
 test('custom aliases drive generated Claude commands, docs, and Codex wrappers', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -674,7 +770,7 @@ test('custom aliases drive generated Claude commands, docs, and Codex wrappers',
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'new.md')));
     assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/branch';
     config.aliases.resume = '/back';
@@ -700,8 +796,10 @@ test('custom aliases drive generated Claude commands, docs, and Codex wrappers',
     const readme = readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
     const workflowDoc = readFileSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md'), 'utf8');
     assert.match(readme, /\/branch/);
-    assert.match(readme, /Each Codex user runs `npm run workflow:setup`/);
+    assert.match(readme, /pipelane install-claude/);
+    assert.match(readme, /pipelane install-codex/);
     assert.match(workflowDoc, /\/branch/);
+    assert.match(workflowDoc, /pipelane install-claude/);
     assert.match(workflowDoc, /Codex wrappers are machine-global/);
 
     assert.ok(existsSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md')));
@@ -710,7 +808,7 @@ test('custom aliases drive generated Claude commands, docs, and Codex wrappers',
     assert.equal(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')), false);
     assert.equal(existsSync(path.join(codexHome, 'skills', 'resume', 'SKILL.md')), false);
     assert.equal(existsSync(path.join(codexHome, 'skills', 'pr', 'SKILL.md')), false);
-    assert.match(readFileSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md'), 'utf8'), /run-workflow\.sh --alias \/branch/);
+    assert.match(readFileSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md'), 'utf8'), /run-pipelane\.sh --alias \/branch/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -719,14 +817,14 @@ test('custom aliases drive generated Claude commands, docs, and Codex wrappers',
 
 test('setup fails closed when an alias would overwrite an unrelated Claude command', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     mkdirSync(path.join(repoRoot, '.claude', 'commands'), { recursive: true });
     writeFileSync(path.join(repoRoot, '.claude', 'commands', 'branch.md'), 'custom branch command\n', 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/branch';
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -743,14 +841,14 @@ test('setup fails closed when an alias would overwrite an unrelated Claude comma
 
 test('setup fails closed when an alias would overwrite an unrelated Codex skill', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     mkdirSync(path.join(codexHome, 'skills', 'branch'), { recursive: true });
     writeFileSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md'), 'custom branch skill\n', 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/branch';
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -765,9 +863,9 @@ test('setup fails closed when an alias would overwrite an unrelated Codex skill'
   }
 });
 
-test('legacy workflow-generated Claude commands and Codex skills are pruned on alias rename', () => {
+test('managed Claude commands and Codex skills are pruned on alias rename', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -780,7 +878,7 @@ test('legacy workflow-generated Claude commands and Codex skills are pruned on a
         'Run:',
         '',
         '```bash',
-        'npm run workflow:new -- <args-from-user>',
+        'npm run pipelane:new -- <args-from-user>',
         '```',
         '',
         'Display the output directly. Call out that the chat/workspace has not moved automatically yet.',
@@ -796,7 +894,7 @@ test('legacy workflow-generated Claude commands and Codex skills are pruned on a
         'Run:',
         '',
         '```bash',
-        'npm run workflow:resume -- <args-from-user>',
+        'npm run pipelane:resume -- <args-from-user>',
         '```',
         '',
         'Display the output directly. Call out that the chat/workspace has not moved automatically yet.',
@@ -812,7 +910,7 @@ test('legacy workflow-generated Claude commands and Codex skills are pruned on a
         'Run:',
         '',
         '```bash',
-        'npm run workflow:pr -- <args-from-user>',
+        'npm run pipelane:pr -- <args-from-user>',
         '```',
         '',
         'Display the output directly.',
@@ -825,12 +923,12 @@ test('legacy workflow-generated Claude commands and Codex skills are pruned on a
       mkdirSync(path.join(codexHome, 'skills', skill), { recursive: true });
       writeFileSync(
         path.join(codexHome, 'skills', skill, 'SKILL.md'),
-        `legacy skill\n~/.codex/skills/rocketboard-workflow/bin/run-workflow.sh ${skill}\n`,
+        `Run the generic pipelane wrapper for this repo.\n~/.codex/skills/.pipelane/bin/run-pipelane.sh ${skill}\n`,
         'utf8',
       );
     }
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/branch';
     config.aliases.resume = '/back';
@@ -860,7 +958,7 @@ test('legacy workflow-generated Claude commands and Codex skills are pruned on a
 
 test('consumer-extension markers preserve inner content across re-sync and template changes', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -868,16 +966,16 @@ test('consumer-extension markers preserve inner content across re-sync and templ
 
     const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
     const firstPass = readFileSync(cleanPath, 'utf8');
-    assert.match(firstPass, /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/);
+    assert.match(firstPass, /<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->/);
 
     const extended = firstPass.replace(
-      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->',
       [
-        '<!-- workflow-kit:consumer-extension:start -->',
+        '<!-- pipelane:consumer-extension:start -->',
         '## ROCKETBOARD GIT-JANITOR SECTION',
         '',
         'Run `npm run git:cleanup -- --apply` to prune stale branches.',
-        '<!-- workflow-kit:consumer-extension:end -->',
+        '<!-- pipelane:consumer-extension:end -->',
       ].join('\n'),
     );
     writeFileSync(cleanPath, extended, 'utf8');
@@ -889,16 +987,21 @@ test('consumer-extension markers preserve inner content across re-sync and templ
     assert.match(preserved, /npm run git:cleanup -- --apply/);
     // The rendered pipelane body is unchanged: first-line marker + the
     // canonical template opening line still match.
-    assert.match(preserved, /<!-- workflow-kit:command:clean -->/);
+    assert.match(preserved, /<!-- pipelane:command:clean -->/);
     assert.match(preserved, /Report workflow cleanup status and prune stale task locks when requested\./);
 
     // Bonus: mutate the upstream template body inside a throwaway kit copy
     // and verify the consumer extension survives when pipelane re-renders
     // with the new body.
-    const tmpKit = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-mutated-'));
+    const tmpKit = mkdtempSync(path.join(os.tmpdir(), 'pipelane-mutated-'));
     try {
       cpSync(path.join(KIT_ROOT, 'src'), path.join(tmpKit, 'src'), { recursive: true });
+      cpSync(path.join(KIT_ROOT, 'bin'), path.join(tmpKit, 'bin'), { recursive: true });
+      cpSync(path.join(KIT_ROOT, 'dist'), path.join(tmpKit, 'dist'), { recursive: true });
+      cpSync(path.join(KIT_ROOT, 'docs'), path.join(tmpKit, 'docs'), { recursive: true });
       cpSync(path.join(KIT_ROOT, 'templates'), path.join(tmpKit, 'templates'), { recursive: true });
+      cpSync(path.join(KIT_ROOT, 'README.md'), path.join(tmpKit, 'README.md'));
+      cpSync(path.join(KIT_ROOT, 'package.json'), path.join(tmpKit, 'package.json'));
 
       const mutatedTemplatePath = path.join(tmpKit, 'templates', '.claude', 'commands', 'clean.md');
       const mutatedTemplate = readFileSync(mutatedTemplatePath, 'utf8').replace(
@@ -931,12 +1034,12 @@ test('consumer-extension markers preserve inner content across re-sync and templ
 
 test('consumer-extension preserve logic follows aliased filenames', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.clean = '/cleanup';
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -945,14 +1048,14 @@ test('consumer-extension preserve logic follows aliased filenames', () => {
 
     const aliasedPath = path.join(repoRoot, '.claude', 'commands', 'cleanup.md');
     const firstPass = readFileSync(aliasedPath, 'utf8');
-    assert.match(firstPass, /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/);
+    assert.match(firstPass, /<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->/);
 
     const extended = firstPass.replace(
-      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->',
       [
-        '<!-- workflow-kit:consumer-extension:start -->',
+        '<!-- pipelane:consumer-extension:start -->',
         'ALIASED EXTENSION SENTINEL',
-        '<!-- workflow-kit:consumer-extension:end -->',
+        '<!-- pipelane:consumer-extension:end -->',
       ].join('\n'),
     );
     writeFileSync(aliasedPath, extended, 'utf8');
@@ -961,7 +1064,7 @@ test('consumer-extension preserve logic follows aliased filenames', () => {
 
     const preserved = readFileSync(aliasedPath, 'utf8');
     assert.match(preserved, /ALIASED EXTENSION SENTINEL/);
-    assert.match(preserved, /<!-- workflow-kit:command:clean -->/);
+    assert.match(preserved, /<!-- pipelane:command:clean -->/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -970,7 +1073,7 @@ test('consumer-extension preserve logic follows aliased filenames', () => {
 
 test('every managed command template renders with an empty consumer-extension marker pair', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -985,12 +1088,12 @@ test('every managed command template renders with an empty consumer-extension ma
       const contents = readFileSync(path.join(repoRoot, '.claude', 'commands', `${cmd}.md`), 'utf8');
       assert.match(
         contents,
-        /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/,
+        /<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->/,
         `${cmd}.md missing empty consumer-extension marker pair`,
       );
       assert.match(
         contents,
-        new RegExp(`<!-- workflow-kit:command:${cmd} -->`),
+        new RegExp(`<!-- pipelane:command:${cmd} -->`),
         `${cmd}.md missing command marker`,
       );
     }
@@ -1002,7 +1105,7 @@ test('every managed command template renders with an empty consumer-extension ma
 
 test('consumer-extension preservation works for every managed command', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1012,11 +1115,11 @@ test('consumer-extension preservation works for every managed command', () => {
     for (const cmd of commands) {
       const p = path.join(repoRoot, '.claude', 'commands', `${cmd}.md`);
       const seeded = readFileSync(p, 'utf8').replace(
-        '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+        '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->',
         [
-          '<!-- workflow-kit:consumer-extension:start -->',
+          '<!-- pipelane:consumer-extension:start -->',
           `SENTINEL-${cmd}`,
-          '<!-- workflow-kit:consumer-extension:end -->',
+          '<!-- pipelane:consumer-extension:end -->',
         ].join('\n'),
       );
       writeFileSync(p, seeded, 'utf8');
@@ -1041,7 +1144,7 @@ test('legacy pipelane.md (no marker) is upgraded in place on next setup', () => 
   // treat it as managed (not a collision), and overwrite with the
   // marker-bearing template.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1070,10 +1173,10 @@ test('legacy pipelane.md (no marker) is upgraded in place on next setup', () => 
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
 
     const after = readFileSync(pipelanePath, 'utf8');
-    assert.match(after, /<!-- workflow-kit:command:pipelane -->/);
+    assert.match(after, /<!-- pipelane:command:pipelane -->/);
     assert.match(
       after,
-      /<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->/,
+      /<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->/,
     );
     assert.doesNotMatch(after, /Legacy body that predates the marker pair\./);
   } finally {
@@ -1087,14 +1190,14 @@ test('unrelated pre-existing pipelane.md raises collision instead of silently cl
   // without the legacy signatures shouldn't have it overwritten. This
   // mirrors the operator-command collision contract.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     // Nuke the init-generated pipelane.md + its managed manifest entry so
     // the next setup treats the directory as "consumer-authored."
     rmSync(path.join(repoRoot, '.claude', 'commands', 'pipelane.md'), { force: true });
-    rmSync(path.join(repoRoot, '.claude', 'commands', '.workflow-kit-managed.json'), { force: true });
+    rmSync(path.join(repoRoot, '.claude', 'commands', '.pipelane-managed.json'), { force: true });
     writeFileSync(
       path.join(repoRoot, '.claude', 'commands', 'pipelane.md'),
       'Custom consumer notes. Not managed by pipelane.\n',
@@ -1122,12 +1225,12 @@ test('setup rejects operator aliases that collide with MANAGED_EXTRA_COMMANDS fi
   // time — a consumer who opts out of claudeCommands never hits the
   // collision and shouldn't be blocked from aliasing /pipelane.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/pipelane';
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1153,15 +1256,15 @@ test('setup allows /pipelane operator alias when claudeCommands syncing is disab
   // regression for repos that just want the state machine, not the .claude/
   // command files. Only enforce when the collision actually materializes.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/pipelane';
-    // packageScripts must stay on so `workflow:*` scripts exist; claudeCommands
+    // packageScripts must stay on so `pipelane:*` scripts exist; claudeCommands
     // off is the operative opt-out here.
     config.syncDocs = { claudeCommands: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1203,7 +1306,7 @@ test('pipelane.md consumer-extension survives when a different operator command 
   // render before capture, or ManagedCommand keys collide across sets),
   // this test catches it.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1211,16 +1314,16 @@ test('pipelane.md consumer-extension survives when a different operator command 
 
     const pipelanePath = path.join(repoRoot, '.claude', 'commands', 'pipelane.md');
     const pipelaneSeeded = readFileSync(pipelanePath, 'utf8').replace(
-      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->',
       [
-        '<!-- workflow-kit:consumer-extension:start -->',
+        '<!-- pipelane:consumer-extension:start -->',
         'PIPELANE-EXT-SENTINEL',
-        '<!-- workflow-kit:consumer-extension:end -->',
+        '<!-- pipelane:consumer-extension:end -->',
       ].join('\n'),
     );
     writeFileSync(pipelanePath, pipelaneSeeded, 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases = { ...(config.aliases ?? {}), clean: '/janitor' };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1231,7 +1334,7 @@ test('pipelane.md consumer-extension survives when a different operator command 
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'janitor.md')));
     const after = readFileSync(pipelanePath, 'utf8');
     assert.match(after, /PIPELANE-EXT-SENTINEL/);
-    assert.match(after, /<!-- workflow-kit:command:pipelane -->/);
+    assert.match(after, /<!-- pipelane:command:pipelane -->/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -1243,7 +1346,7 @@ test('pipelane.md consumer-extension persists when syncDocs.claudeCommands flips
   // extension into the regenerated marker-bearing file. A capture/write
   // ordering regression in the extras loop would drop the sentinel here.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1251,16 +1354,16 @@ test('pipelane.md consumer-extension persists when syncDocs.claudeCommands flips
 
     const pipelanePath = path.join(repoRoot, '.claude', 'commands', 'pipelane.md');
     const seeded = readFileSync(pipelanePath, 'utf8').replace(
-      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->',
       [
-        '<!-- workflow-kit:consumer-extension:start -->',
+        '<!-- pipelane:consumer-extension:start -->',
         'FLIP-SENTINEL',
-        '<!-- workflow-kit:consumer-extension:end -->',
+        '<!-- pipelane:consumer-extension:end -->',
       ].join('\n'),
     );
     writeFileSync(pipelanePath, seeded, 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
 
     config.syncDocs = { claudeCommands: false };
@@ -1274,7 +1377,7 @@ test('pipelane.md consumer-extension persists when syncDocs.claudeCommands flips
 
     const after = readFileSync(pipelanePath, 'utf8');
     assert.match(after, /FLIP-SENTINEL/);
-    assert.match(after, /<!-- workflow-kit:command:pipelane -->/);
+    assert.match(after, /<!-- pipelane:command:pipelane -->/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -1288,12 +1391,12 @@ test('partial legacy-signature match on pipelane.md is treated as collision, not
   // positive clobber. A future change weakening it to OR would break
   // this test.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     rmSync(path.join(repoRoot, '.claude', 'commands', 'pipelane.md'), { force: true });
-    rmSync(path.join(repoRoot, '.claude', 'commands', '.workflow-kit-managed.json'), { force: true });
+    rmSync(path.join(repoRoot, '.claude', 'commands', '.pipelane-managed.json'), { force: true });
     writeFileSync(
       path.join(repoRoot, '.claude', 'commands', 'pipelane.md'),
       'Run a Pipelane subcommand for this repo.\n\nCustom consumer body, no npm script mention.\n',
@@ -1324,7 +1427,7 @@ test('legacy pipelane signatures are gated by filename to prevent consumer-file 
   // unlinks it. The extras-specific filename gate in
   // detectLegacyClaudeCommand prevents that clobber.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1398,20 +1501,20 @@ test('pipelane.md template body contains every LEGACY_CLAUDE_SIGNATURES[pipelane
 
 test('consumer-extension ignores malformed marker pairs without crashing', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
 
     const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
-    const emptyPair = '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->';
+    const emptyPair = '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->';
     const base = readFileSync(cleanPath, 'utf8');
 
     const cases = [
-      { label: 'start-only', body: base.replace(emptyPair, '<!-- workflow-kit:consumer-extension:start -->\nSTRAY') },
-      { label: 'end-only', body: base.replace(emptyPair, 'STRAY\n<!-- workflow-kit:consumer-extension:end -->') },
-      { label: 'reversed', body: base.replace(emptyPair, '<!-- workflow-kit:consumer-extension:end -->\nSTRAY\n<!-- workflow-kit:consumer-extension:start -->') },
+      { label: 'start-only', body: base.replace(emptyPair, '<!-- pipelane:consumer-extension:start -->\nSTRAY') },
+      { label: 'end-only', body: base.replace(emptyPair, 'STRAY\n<!-- pipelane:consumer-extension:end -->') },
+      { label: 'reversed', body: base.replace(emptyPair, '<!-- pipelane:consumer-extension:end -->\nSTRAY\n<!-- pipelane:consumer-extension:start -->') },
     ];
 
     for (const { label, body } of cases) {
@@ -1419,7 +1522,7 @@ test('consumer-extension ignores malformed marker pairs without crashing', () =>
       runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
       const after = readFileSync(cleanPath, 'utf8');
       assert.doesNotMatch(after, /STRAY/, `${label}: stray content should not have been preserved`);
-      assert.match(after, new RegExp('<!-- workflow-kit:consumer-extension:start -->\\n<!-- workflow-kit:consumer-extension:end -->'), `${label}: expected canonical empty marker pair`);
+      assert.match(after, new RegExp('<!-- pipelane:consumer-extension:start -->\\n<!-- pipelane:consumer-extension:end -->'), `${label}: expected canonical empty marker pair`);
     }
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
@@ -1429,7 +1532,7 @@ test('consumer-extension ignores malformed marker pairs without crashing', () =>
 
 test('consumer-extension preserves content even when it contains a nested end-marker literal', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1440,12 +1543,12 @@ test('consumer-extension preserves content even when it contains a nested end-ma
     // Using lastIndexOf for the end marker guards against the first
     // (inner) `:end -->` truncating the extension on the next re-sync.
     const withNestedMarker = readFileSync(cleanPath, 'utf8').replace(
-      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->',
       [
-        '<!-- workflow-kit:consumer-extension:start -->',
-        'Our protocol closes with `<!-- workflow-kit:consumer-extension:end -->` on its own line.',
+        '<!-- pipelane:consumer-extension:start -->',
+        'Our protocol closes with `<!-- pipelane:consumer-extension:end -->` on its own line.',
         'KEEP-ME-AFTER-NESTED-MARKER',
-        '<!-- workflow-kit:consumer-extension:end -->',
+        '<!-- pipelane:consumer-extension:end -->',
       ].join('\n'),
     );
     writeFileSync(cleanPath, withNestedMarker, 'utf8');
@@ -1462,7 +1565,7 @@ test('consumer-extension preserves content even when it contains a nested end-ma
 
 test('consumer-extension survives an alias rename after the content was added', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1470,16 +1573,16 @@ test('consumer-extension survives an alias rename after the content was added', 
 
     const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
     const withExtension = readFileSync(cleanPath, 'utf8').replace(
-      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->',
       [
-        '<!-- workflow-kit:consumer-extension:start -->',
+        '<!-- pipelane:consumer-extension:start -->',
         'RENAME-MIGRATION-SENTINEL',
-        '<!-- workflow-kit:consumer-extension:end -->',
+        '<!-- pipelane:consumer-extension:end -->',
       ].join('\n'),
     );
     writeFileSync(cleanPath, withExtension, 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.clean = '/cleanup';
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1490,7 +1593,7 @@ test('consumer-extension survives an alias rename after the content was added', 
     const renamedPath = path.join(repoRoot, '.claude', 'commands', 'cleanup.md');
     const migrated = readFileSync(renamedPath, 'utf8');
     assert.match(migrated, /RENAME-MIGRATION-SENTINEL/);
-    assert.match(migrated, /<!-- workflow-kit:command:clean -->/);
+    assert.match(migrated, /<!-- pipelane:command:clean -->/);
 
     // Rename a second time — content should still follow the command.
     const updatedConfig = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -1511,17 +1614,17 @@ test('consumer-extension survives an alias rename after the content was added', 
 
 test('syncDocs.readmeSection: false leaves README.md untouched', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
     const readmePath = path.join(repoRoot, 'README.md');
-    // Consumer owns README entirely — no workflow-kit markers, original
+    // Consumer owns README entirely — no pipelane markers, original
     // content must survive.
     writeFileSync(readmePath, '# Owned By Consumer\n\nHand-written README.\n', 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { readmeSection: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1530,7 +1633,7 @@ test('syncDocs.readmeSection: false leaves README.md untouched', () => {
 
     const after = readFileSync(readmePath, 'utf8');
     assert.equal(after, '# Owned By Consumer\n\nHand-written README.\n');
-    assert.doesNotMatch(after, /workflow-kit:readme:start/);
+    assert.doesNotMatch(after, /pipelane:readme:start/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -1539,7 +1642,7 @@ test('syncDocs.readmeSection: false leaves README.md untouched', () => {
 
 test('syncDocs.contributingSection + agentsSection: false leave those files untouched', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1547,7 +1650,7 @@ test('syncDocs.contributingSection + agentsSection: false leave those files unto
     writeFileSync(path.join(repoRoot, 'CONTRIBUTING.md'), '# Consumer Contributing\n', 'utf8');
     writeFileSync(path.join(repoRoot, 'AGENTS.md'), '# Consumer Agents\n', 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { contributingSection: false, agentsSection: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1562,16 +1665,16 @@ test('syncDocs.contributingSection + agentsSection: false leave those files unto
   }
 });
 
-test('syncDocs.docsReleaseWorkflow + workflowClaudeTemplate: false skip those file writes', () => {
+test('syncDocs.docsReleaseWorkflow + pipelaneClaudeTemplate: false skip those file writes', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
-    config.syncDocs = { docsReleaseWorkflow: false, workflowClaudeTemplate: false };
+    config.syncDocs = { docsReleaseWorkflow: false, pipelaneClaudeTemplate: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 
     // Clear files that init already wrote with the default config so the
@@ -1593,12 +1696,12 @@ test('syncDocs.docsReleaseWorkflow + workflowClaudeTemplate: false skip those fi
 
 test('syncDocs.claudeCommands: false skips the entire command-regen path', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { claudeCommands: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1611,7 +1714,7 @@ test('syncDocs.claudeCommands: false skips the entire command-regen path', () =>
 
     assert.equal(existsSync(path.join(repoRoot, '.claude', 'commands', 'clean.md')), false);
     assert.equal(existsSync(path.join(repoRoot, '.claude', 'commands', 'pipelane.md')), false);
-    assert.equal(existsSync(path.join(repoRoot, '.claude', 'commands', '.workflow-kit-managed.json')), false);
+    assert.equal(existsSync(path.join(repoRoot, '.claude', 'commands', '.pipelane-managed.json')), false);
     // Non-command surfaces still land.
     assert.ok(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')));
     assert.ok(existsSync(path.join(repoRoot, 'README.md')));
@@ -1623,31 +1726,31 @@ test('syncDocs.claudeCommands: false skips the entire command-regen path', () =>
 
 test('syncDocs.packageScripts: false preserves consumer-customized workflow scripts', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
     // Simulate a consumer that wants its own wrappers around pipelane:
     // they're opting out of packageScripts precisely so their customized
-    // workflow:* entries don't get overwritten on every re-sync.
+    // pipelane:* entries don't get overwritten on every re-sync.
     const packageJsonPath = path.join(repoRoot, 'package.json');
     const customScripts = {
       build: 'my-build',
-      'workflow:new': 'my-wrapper new',
-      'workflow:resume': 'my-wrapper resume',
-      'workflow:pr': 'my-wrapper pr',
-      'workflow:merge': 'my-wrapper merge',
-      'workflow:deploy': 'my-wrapper deploy',
-      'workflow:clean': 'my-wrapper clean',
-      'workflow:devmode': 'my-wrapper devmode',
-      'workflow:status': 'my-wrapper status',
-      'workflow:doctor': 'my-wrapper doctor',
-      'workflow:rollback': 'my-wrapper rollback',
-      // devmode.md tells operators to run `workflow:configure` when release
+      'pipelane:new': 'my-wrapper new',
+      'pipelane:resume': 'my-wrapper resume',
+      'pipelane:pr': 'my-wrapper pr',
+      'pipelane:merge': 'my-wrapper merge',
+      'pipelane:deploy': 'my-wrapper deploy',
+      'pipelane:clean': 'my-wrapper clean',
+      'pipelane:devmode': 'my-wrapper devmode',
+      'pipelane:status': 'my-wrapper status',
+      'pipelane:doctor': 'my-wrapper doctor',
+      'pipelane:rollback': 'my-wrapper rollback',
+      // devmode.md tells operators to run `pipelane:configure` when release
       // mode is blocked; the consistency check requires consumers opting out
       // of packageScripts to define it themselves.
-      'workflow:configure': 'my-wrapper configure',
+      'pipelane:configure': 'my-wrapper configure',
     };
     const consumerPackage = {
       name: 'consumer-app',
@@ -1657,7 +1760,7 @@ test('syncDocs.packageScripts: false preserves consumer-customized workflow scri
     };
     writeFileSync(packageJsonPath, `${JSON.stringify(consumerPackage, null, 2)}\n`, 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { packageScripts: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1672,14 +1775,14 @@ test('syncDocs.packageScripts: false preserves consumer-customized workflow scri
   }
 });
 
-test('syncDocs.packageScripts: false without required workflow:* scripts throws with guidance', () => {
+test('syncDocs.packageScripts: false without required pipelane:* scripts throws with guidance', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    // Consumer wipes the kit-installed workflow:* scripts but forgot to
+    // Consumer wipes the kit-installed pipelane:* scripts but forgot to
     // either replace them or also opt out of claudeCommands. Setup must
     // fail loudly, not silently leave a broken slash-command config.
     const packageJsonPath = path.join(repoRoot, 'package.json');
@@ -1691,7 +1794,7 @@ test('syncDocs.packageScripts: false without required workflow:* scripts throws 
     };
     writeFileSync(packageJsonPath, `${JSON.stringify(consumerPackage, null, 2)}\n`, 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { packageScripts: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1699,7 +1802,7 @@ test('syncDocs.packageScripts: false without required workflow:* scripts throws 
     const result = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome }, true);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /packageScripts is false but package\.json is missing required npm scripts/);
-    assert.match(result.stderr, /workflow:clean/);
+    assert.match(result.stderr, /pipelane:clean/);
     // Error message must list the three escape hatches so the consumer
     // can recover without digging into the codebase.
     assert.match(result.stderr, /set syncDocs\.packageScripts to true/);
@@ -1712,7 +1815,7 @@ test('syncDocs.packageScripts: false without required workflow:* scripts throws 
 
 test('syncDocs.packageScripts: false is allowed when claudeCommands is also false', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1723,7 +1826,7 @@ test('syncDocs.packageScripts: false is allowed when claudeCommands is also fals
     const consumerPackage = { name: 'consumer-app', private: true, type: 'module', scripts: { build: 'my-build' } };
     writeFileSync(packageJsonPath, `${JSON.stringify(consumerPackage, null, 2)}\n`, 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { packageScripts: false, claudeCommands: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1740,7 +1843,7 @@ test('syncDocs.packageScripts: false is allowed when claudeCommands is also fals
 
 test('syncDocs absent preserves current all-surfaces-sync behavior', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1748,12 +1851,12 @@ test('syncDocs absent preserves current all-surfaces-sync behavior', () => {
 
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'clean.md')));
     assert.ok(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')));
-    assert.ok(existsSync(path.join(repoRoot, 'workflow', 'CLAUDE.template.md')));
-    assert.match(readFileSync(path.join(repoRoot, 'README.md'), 'utf8'), /workflow-kit:readme:start/);
-    assert.match(readFileSync(path.join(repoRoot, 'CONTRIBUTING.md'), 'utf8'), /workflow-kit:contributing:start/);
-    assert.match(readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), /workflow-kit:agents:start/);
+    assert.ok(existsSync(path.join(repoRoot, 'pipelane', 'CLAUDE.template.md')));
+    assert.match(readFileSync(path.join(repoRoot, 'README.md'), 'utf8'), /pipelane:readme:start/);
+    assert.match(readFileSync(path.join(repoRoot, 'CONTRIBUTING.md'), 'utf8'), /pipelane:contributing:start/);
+    assert.match(readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), /pipelane:agents:start/);
     const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-    assert.equal(pkg.scripts['workflow:setup'], 'pipelane setup');
+    assert.equal(pkg.scripts['pipelane:setup'], 'pipelane setup');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -1762,12 +1865,12 @@ test('syncDocs absent preserves current all-surfaces-sync behavior', () => {
 
 test('syncDocs resolver coerces non-boolean junk back to defaults', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     // Garbage values: string 'false' is truthy in JS, but the resolver
     // must treat non-booleans as "use the default" or a consumer who
@@ -1797,11 +1900,11 @@ test('syncDocs resolver coerces non-boolean junk back to defaults', () => {
     // docsReleaseWorkflow: false is a real boolean → honored → no file.
     assert.equal(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')), false);
     // Junk values fall back to default true → surface DID sync.
-    assert.match(readFileSync(path.join(repoRoot, 'README.md'), 'utf8'), /workflow-kit:readme:start/);
-    assert.match(readFileSync(path.join(repoRoot, 'CONTRIBUTING.md'), 'utf8'), /workflow-kit:contributing:start/);
-    assert.match(readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), /workflow-kit:agents:start/);
+    assert.match(readFileSync(path.join(repoRoot, 'README.md'), 'utf8'), /pipelane:readme:start/);
+    assert.match(readFileSync(path.join(repoRoot, 'CONTRIBUTING.md'), 'utf8'), /pipelane:contributing:start/);
+    assert.match(readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), /pipelane:agents:start/);
     const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-    assert.equal(pkg.scripts['workflow:setup'], 'pipelane setup');
+    assert.equal(pkg.scripts['pipelane:setup'], 'pipelane setup');
     assert.equal(pkg.scripts.build, 'my-build');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
@@ -1811,12 +1914,12 @@ test('syncDocs resolver coerces non-boolean junk back to defaults', () => {
 
 test('syncDocs as a non-object (string) resolves to all defaults without crashing', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     // Totally malformed: a string instead of an object. Spreading a
     // string over DEFAULT_SYNC_DOCS would introduce numeric-keyed junk;
@@ -1829,27 +1932,27 @@ test('syncDocs as a non-object (string) resolves to all defaults without crashin
     // Every surface still syncs (all defaults remain true).
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'clean.md')));
     assert.ok(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')));
-    assert.match(readFileSync(path.join(repoRoot, 'README.md'), 'utf8'), /workflow-kit:readme:start/);
+    assert.match(readFileSync(path.join(repoRoot, 'README.md'), 'utf8'), /pipelane:readme:start/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
   }
 });
 
-test('readmeSection: false preserves pre-existing workflow-kit marker block byte-for-byte', () => {
+test('readmeSection: false preserves pre-existing pipelane marker block byte-for-byte', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
     const readmePath = path.join(repoRoot, 'README.md');
     const syncedBytes = readFileSync(readmePath, 'utf8');
-    assert.match(syncedBytes, /workflow-kit:readme:start/);
+    assert.match(syncedBytes, /pipelane:readme:start/);
 
     // Consumer now renames the project AND opts out of README sync.
     // The stale marker block should survive unchanged until they re-enable.
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.displayName = 'Renamed App';
     config.syncDocs = { readmeSection: false };
@@ -1866,7 +1969,7 @@ test('readmeSection: false preserves pre-existing workflow-kit marker block byte
 
 test('claudeCommands: false preserves consumer-extension content without pruning', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -1874,16 +1977,16 @@ test('claudeCommands: false preserves consumer-extension content without pruning
 
     const cleanPath = path.join(repoRoot, '.claude', 'commands', 'clean.md');
     const withExtension = readFileSync(cleanPath, 'utf8').replace(
-      '<!-- workflow-kit:consumer-extension:start -->\n<!-- workflow-kit:consumer-extension:end -->',
+      '<!-- pipelane:consumer-extension:start -->\n<!-- pipelane:consumer-extension:end -->',
       [
-        '<!-- workflow-kit:consumer-extension:start -->',
+        '<!-- pipelane:consumer-extension:start -->',
         'CONSUMER-CONTENT-UNDER-OPTOUT',
-        '<!-- workflow-kit:consumer-extension:end -->',
+        '<!-- pipelane:consumer-extension:end -->',
       ].join('\n'),
     );
     writeFileSync(cleanPath, withExtension, 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { claudeCommands: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1903,12 +2006,12 @@ test('claudeCommands: false preserves consumer-extension content without pruning
 
 test('all seven flags: false produces zero writes from a wiped repo', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = {
       claudeCommands: false,
@@ -1916,7 +2019,7 @@ test('all seven flags: false produces zero writes from a wiped repo', () => {
       contributingSection: false,
       agentsSection: false,
       docsReleaseWorkflow: false,
-      workflowClaudeTemplate: false,
+      pipelaneClaudeTemplate: false,
       packageScripts: false,
     };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -1950,19 +2053,19 @@ test('all seven flags: false produces zero writes from a wiped repo', () => {
 test('Codex alias wrappers stay safe when different repos map the same alias differently', () => {
   const repoOne = createRepo();
   const repoTwo = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Repo One'], repoOne);
     runCli(['init', '--project', 'Repo Two'], repoTwo);
 
-    const repoOneConfigPath = path.join(repoOne, '.project-workflow.json');
+    const repoOneConfigPath = path.join(repoOne, '.pipelane.json');
     const repoOneConfig = JSON.parse(readFileSync(repoOneConfigPath, 'utf8'));
     repoOneConfig.aliases.new = '/branch';
     repoOneConfig.aliases.resume = '/back';
     writeFileSync(repoOneConfigPath, `${JSON.stringify(repoOneConfig, null, 2)}\n`, 'utf8');
 
-    const repoTwoConfigPath = path.join(repoTwo, '.project-workflow.json');
+    const repoTwoConfigPath = path.join(repoTwo, '.pipelane.json');
     const repoTwoConfig = JSON.parse(readFileSync(repoTwoConfigPath, 'utf8'));
     repoTwoConfig.aliases.resume = '/branch';
     writeFileSync(repoTwoConfigPath, `${JSON.stringify(repoTwoConfig, null, 2)}\n`, 'utf8');
@@ -1971,9 +2074,9 @@ test('Codex alias wrappers stay safe when different repos map the same alias dif
     runCli(['setup'], repoTwo, { CODEX_HOME: codexHome });
 
     const branchSkill = readFileSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md'), 'utf8');
-    assert.match(branchSkill, /run-workflow\.sh --alias \/branch/);
-    assert.doesNotMatch(branchSkill, /run-workflow\.sh new/);
-    assert.doesNotMatch(branchSkill, /run-workflow\.sh resume/);
+    assert.match(branchSkill, /run-pipelane\.sh --alias \/branch/);
+    assert.doesNotMatch(branchSkill, /run-pipelane\.sh new/);
+    assert.doesNotMatch(branchSkill, /run-pipelane\.sh resume/);
     assert.ok(existsSync(path.join(codexHome, 'skills', 'back', 'SKILL.md')));
   } finally {
     rmSync(repoOne, { recursive: true, force: true });
@@ -1984,14 +2087,14 @@ test('Codex alias wrappers stay safe when different repos map the same alias dif
 
 test('setup migrates legacy managed-skills.json without preserving stale aliases', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    mkdirSync(path.join(codexHome, 'skills', 'workflow-kit'), { recursive: true });
+    mkdirSync(path.join(codexHome, 'skills', '.pipelane'), { recursive: true });
     writeFileSync(
-      path.join(codexHome, 'skills', 'workflow-kit', 'managed-skills.json'),
+      path.join(codexHome, 'skills', '.pipelane', 'managed-skills.json'),
       `${JSON.stringify({ skills: ['new', 'resume', 'pr'] }, null, 2)}\n`,
       'utf8',
     );
@@ -2000,12 +2103,12 @@ test('setup migrates legacy managed-skills.json without preserving stale aliases
       mkdirSync(path.join(codexHome, 'skills', skill), { recursive: true });
       writeFileSync(
         path.join(codexHome, 'skills', skill, 'SKILL.md'),
-        `legacy skill\n~/.codex/skills/rocketboard-workflow/bin/run-workflow.sh ${skill}\n`,
+        `Run the generic pipelane wrapper for this repo.\n~/.codex/skills/.pipelane/bin/run-pipelane.sh ${skill}\n`,
         'utf8',
       );
     }
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/branch';
     config.aliases.resume = '/back';
@@ -2021,7 +2124,7 @@ test('setup migrates legacy managed-skills.json without preserving stale aliases
     assert.ok(existsSync(path.join(codexHome, 'skills', 'back', 'SKILL.md')));
     assert.ok(existsSync(path.join(codexHome, 'skills', 'draft-pr', 'SKILL.md')));
 
-    const manifest = JSON.parse(readFileSync(path.join(codexHome, 'skills', 'workflow-kit', 'managed-skills.json'), 'utf8'));
+    const manifest = JSON.parse(readFileSync(path.join(codexHome, 'skills', '.pipelane', 'managed-skills.json'), 'utf8'));
     assert.equal(manifest.version, 2);
     assert.deepEqual(Object.keys(manifest.repos), [realpathSync(repoRoot)]);
   } finally {
@@ -2032,12 +2135,12 @@ test('setup migrates legacy managed-skills.json without preserving stale aliases
 
 test('setup upgrades pre-marker alias-generated Claude commands and prunes them on rename', () => {
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/branch';
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -2050,7 +2153,7 @@ test('setup upgrades pre-marker alias-generated Claude commands and prunes them 
         'Run:',
         '',
         '```bash',
-        'npm run workflow:new -- <args-from-user>',
+        'npm run pipelane:new -- <args-from-user>',
         '```',
         '',
         'Display the output directly. Call out that the chat/workspace has not moved automatically yet.',
@@ -2062,7 +2165,7 @@ test('setup upgrades pre-marker alias-generated Claude commands and prunes them 
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
 
     const upgradedBranch = readFileSync(path.join(repoRoot, '.claude', 'commands', 'branch.md'), 'utf8');
-    assert.match(upgradedBranch, /<!-- workflow-kit:command:new -->/);
+    assert.match(upgradedBranch, /<!-- pipelane:command:new -->/);
 
     config.aliases.new = '/fresh';
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
@@ -2081,7 +2184,7 @@ test('new creates a fresh task workspace and resume restores it', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Primary Task', '--json'], repoRoot).stdout);
 
     assert.equal(created.taskSlug, 'primary-task');
@@ -2100,7 +2203,7 @@ test('new creates a fresh task workspace and resume restores it', () => {
     const duplicate = runCli(['run', 'new', '--task', 'Primary Task'], repoRoot, {}, true);
     assert.equal(duplicate.status, 1);
     assert.match(duplicate.stderr, /already active/);
-    assert.match(duplicate.stderr, /workflow:resume/);
+    assert.match(duplicate.stderr, /pipelane:resume/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
@@ -2111,7 +2214,7 @@ test('new uses the default codex/ branch prefix', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Default Prefix', '--json'], repoRoot).stdout);
     assert.match(created.branch, /^codex\/default-prefix-[a-f0-9]{4}$/);
   } finally {
@@ -2120,16 +2223,16 @@ test('new uses the default codex/ branch prefix', () => {
   }
 });
 
-test('new honors a custom branchPrefix from .project-workflow.json', () => {
+test('new honors a custom branchPrefix from .pipelane.json', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.branchPrefix = 'task/';
     config.legacyBranchPrefixes = ['codex/'];
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Custom Prefix', '--json'], repoRoot).stdout);
     assert.match(created.branch, /^task\/custom-prefix-[a-f0-9]{4}$/);
@@ -2153,7 +2256,7 @@ test('new generates a task-<hex> slug when --task is omitted', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     const created = JSON.parse(runCli(['run', 'new', '--json'], repoRoot).stdout);
     assert.match(created.taskSlug, /^task-[0-9a-f]{4}$/);
@@ -2264,7 +2367,7 @@ async function fingerprintForFullConfig(options = {}, environment = 'staging') {
 }
 
 async function writeStagingSucceededRecord(repoRoot, surfaces, options = {}) {
-  const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+  const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
   mkdirSync(stateDir, { recursive: true });
   const fingerprint = await fingerprintForFullConfig();
   const verificationBySurface = Object.fromEntries(surfaces.map((s) => [
@@ -2301,7 +2404,7 @@ async function writeStagingSucceededRecord(repoRoot, surfaces, options = {}) {
 }
 
 function writeHealthyProbeState(repoRoot, surfaces) {
-  const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+  const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
   mkdirSync(stateDir, { recursive: true });
   const probedAt = new Date().toISOString();
   const records = surfaces.map((surface) => ({
@@ -2333,7 +2436,7 @@ test('release-check blocks when CLAUDE config is full but no staging deploy reco
     assert.equal(output.ready, false);
     assert.deepEqual(output.blockedSurfaces.sort(), ['edge', 'frontend', 'sql']);
     assert.match(output.message, /no succeeded deploy observed/);
-    assert.match(output.message, /workflow:deploy -- staging/);
+    assert.match(output.message, /pipelane:deploy -- staging/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -2403,7 +2506,7 @@ test('release-check: a later staging failure re-blocks a previously-succeeded su
     writeFullDeployConfigClaude(repoRoot);
     const fingerprint = await fingerprintForFullConfig();
 
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     mkdirSync(stateDir, { recursive: true });
     // Records are ordered oldest → newest. A fresh succeeded deploy
     // followed by a failed re-deploy of the same surface must re-block.
@@ -2452,7 +2555,7 @@ test('release-check rejects staging success records without verifiedAt', () => {
     runCli(['setup'], repoRoot);
     writeFullDeployConfigClaude(repoRoot);
 
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     mkdirSync(stateDir, { recursive: true });
     // Hand-forged record with status:'succeeded' but no verifiedAt and no
     // verification block. handleDeploy never produces this shape; only a
@@ -2660,7 +2763,7 @@ test('release-check: an attacker-planted unsigned failed record is invisible whe
       failureReason: 'attacker plant',
       idempotencyKey: 'plant-1',
     };
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({
       records: [goodSigned, plantedFailure],
@@ -2710,7 +2813,7 @@ test('release-check accepts HMAC-signed records when PIPELANE_DEPLOY_STATE_KEY i
       triggeredBy: 'test',
     };
     const signed = { ...record, signature: mod.signDeployRecord(record, key) };
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({ records: [signed] }, null, 2), 'utf8');
     writeHealthyProbeState(repoRoot, ['frontend', 'edge', 'sql']);
@@ -2793,7 +2896,7 @@ test('release-check: legacy aggregate verification only credits frontend', async
     // Legacy-style record: no verificationBySurface, only the aggregate
     // verification block. Surfaces ['frontend','edge','sql'] — under the
     // new gate edge/sql lack their own probe results and must block.
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({
       records: [{
@@ -2830,7 +2933,7 @@ test('release-check does not count failed staging records as observed success', 
     runCli(['setup'], repoRoot);
     writeFullDeployConfigClaude(repoRoot);
 
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     mkdirSync(stateDir, { recursive: true });
     writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({
       records: [{
@@ -2857,12 +2960,12 @@ test('release-check does not count failed staging records as observed success', 
   }
 });
 
-// v4: pluggable checks. Enabled per-consumer via .project-workflow.json:checks.
+// v4: pluggable checks. Enabled per-consumer via .pipelane.json:checks.
 // Absent config = no plugins dispatched. These tests exercise each plugin's
 // dispatch gate and its pass/fail behavior.
 
 function writeProjectWorkflowChecks(repoRoot, checks) {
-  const configPath = path.join(repoRoot, '.project-workflow.json');
+  const configPath = path.join(repoRoot, '.pipelane.json');
   const cfg = JSON.parse(readFileSync(configPath, 'utf8'));
   cfg.checks = checks;
   writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
@@ -2874,7 +2977,7 @@ function writeSecretManifest(repoRoot, manifest) {
   writeFileSync(path.join(manifestDir, 'secrets.manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 }
 
-test('checks: no dispatch when .project-workflow.json has no checks block', async () => {
+test('checks: no dispatch when .pipelane.json has no checks block', async () => {
   const repoRoot = createRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -3270,7 +3373,7 @@ test('checks: failing plugin flips overall ready to false even when observed-dep
 
 test('pr, merge, deploy, and task-lock work with a fake gh adapter', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -3281,7 +3384,7 @@ test('pr, merge, deploy, and task-lock work with a fake gh adapter', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'API Work', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
 
@@ -3321,7 +3424,7 @@ test('pr, merge, deploy, and task-lock work with a fake gh adapter', () => {
 
 test('merge skips auto-deploy in build mode when autoDeployOnMerge is disabled', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -3332,9 +3435,9 @@ test('merge skips auto-deploy in build mode when autoDeployOnMerge is disabled',
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Manual Deploy', '--json'], repoRoot).stdout);
-    const configPath = path.join(created.worktreePath, '.project-workflow.json');
+    const configPath = path.join(created.worktreePath, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.buildMode.autoDeployOnMerge = false;
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
@@ -3358,7 +3461,7 @@ test('merge skips auto-deploy in build mode when autoDeployOnMerge is disabled',
 
 test('deploy verifies via gh run watch + healthcheck stubs and records status=succeeded', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -3370,7 +3473,7 @@ test('deploy verifies via gh run watch + healthcheck stubs and records status=su
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Verify Path', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Verify Path', '--json'], created.worktreePath, env);
@@ -3404,7 +3507,7 @@ test('deploy verifies via gh run watch + healthcheck stubs and records status=su
 
 test('deploy fails closed when healthcheck returns non-2xx', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -3416,7 +3519,7 @@ test('deploy fails closed when healthcheck returns non-2xx', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Bad Healthcheck', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Bad Healthcheck', '--json'], created.worktreePath, env);
@@ -3426,7 +3529,7 @@ test('deploy fails closed when healthcheck returns non-2xx', () => {
     assert.equal(failed.status, 1);
     assert.match(failed.stderr, /healthcheck returned HTTP 503/);
 
-    const stateFile = path.join(repoRoot, '.git', 'workflow-kit-state', 'deploy-state.json');
+    const stateFile = path.join(repoRoot, '.git', 'pipelane-state', 'deploy-state.json');
     const deployState = JSON.parse(readFileSync(stateFile, 'utf8'));
     const latest = deployState.records.at(-1);
     assert.equal(latest.status, 'failed');
@@ -3441,7 +3544,7 @@ test('deploy fails closed when healthcheck returns non-2xx', () => {
 
 test('deploy prod blocks without typed-SHA confirmation in a non-TTY', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -3453,7 +3556,7 @@ test('deploy prod blocks without typed-SHA confirmation in a non-TTY', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     runCli(['run', 'devmode', 'release', '--override', '--reason', 'prod-confirm-test', '--json'], repoRoot);
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Prod Confirm', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
@@ -3478,7 +3581,7 @@ test('deploy prod blocks without typed-SHA confirmation in a non-TTY', () => {
 
 test('deploy prod proceeds when typed-SHA prefix matches via confirm stub', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const base = {
@@ -3490,7 +3593,7 @@ test('deploy prod proceeds when typed-SHA prefix matches via confirm stub', () =
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     runCli(['run', 'devmode', 'release', '--override', '--reason', 'prod-confirm-test', '--json'], repoRoot);
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Prod Confirm OK', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
@@ -3522,7 +3625,7 @@ test('deploy prod proceeds when typed-SHA prefix matches via confirm stub', () =
 
 test('deploy prod rejects PIPELANE_DEPLOY_PROD_CONFIRM_STUB outside NODE_ENV=test', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const baseEnv = {
@@ -3534,7 +3637,7 @@ test('deploy prod rejects PIPELANE_DEPLOY_PROD_CONFIRM_STUB outside NODE_ENV=tes
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     runCli(['run', 'devmode', 'release', '--override', '--reason', 'confirm-stub-gate', '--json'], repoRoot);
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Stub Gate', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
@@ -3560,7 +3663,7 @@ test('deploy prod rejects PIPELANE_DEPLOY_PROD_CONFIRM_STUB outside NODE_ENV=tes
 
 test('api action deploy.prod --execute bypasses the TTY prompt via the API env var', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -3572,7 +3675,7 @@ test('api action deploy.prod --execute bypasses the TTY prompt via the API env v
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     runCli(['run', 'devmode', 'release', '--override', '--reason', 'prod-api-test', '--json'], repoRoot);
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Prod Api', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
@@ -3610,7 +3713,7 @@ test('api action deploy.prod --execute bypasses the TTY prompt via the API env v
 
 test('deploy prod blocks when release-mode staging lacks a succeeded record', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -3620,7 +3723,7 @@ test('deploy prod blocks when release-mode staging lacks a succeeded record', ()
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     // Switch to release mode with override (we're testing the prod gate,
     // not the release-readiness gate).
     runCli(['run', 'devmode', 'release', '--override', '--reason', 'prod-gate-test', '--json'], repoRoot);
@@ -3642,7 +3745,7 @@ test('deploy prod blocks when release-mode staging lacks a succeeded record', ()
 
 test('merge fails closed when gh never reports mergeCommit.oid', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   // Break the merge step: pr.state flips to MERGED but mergeCommit stays null,
@@ -3667,7 +3770,7 @@ test('merge fails closed when gh never reports mergeCommit.oid', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'SHA Miss', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
     runCli(['run', 'pr', '--title', 'SHA Miss', '--json'], created.worktreePath, env);
@@ -3677,7 +3780,7 @@ test('merge fails closed when gh never reports mergeCommit.oid', () => {
     assert.match(failed.stderr, /Timed out waiting for GitHub to report PR #\d+ as MERGED with a merge commit/);
     assert.doesNotMatch(failed.stderr, /rev-parse/);
 
-    const prState = readFileSync(path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json'), 'utf8');
+    const prState = readFileSync(path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json'), 'utf8');
     assert.doesNotMatch(prState, /mergedSha/, 'no mergedSha recorded on failure');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
@@ -3688,7 +3791,7 @@ test('merge fails closed when gh never reports mergeCommit.oid', () => {
 
 test('pr blocks denied paths and --force-include overrides per-path', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -3698,7 +3801,7 @@ test('pr blocks denied paths and --force-include overrides per-path', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Deny Guard', '--json'], repoRoot).stdout);
     // A denied file (operator-local CLAUDE.md) + a .env secret + a harmless
     // feature file. The first two should block; the third is fine.
@@ -3739,7 +3842,7 @@ test('clean --apply --all-stale prunes stale task locks', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Cleanup Me', '--json'], repoRoot).stdout);
 
     execFileSync('git', ['worktree', 'remove', '--force', created.worktreePath], {
@@ -3767,7 +3870,7 @@ test('clean --apply without scope refuses to run', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const failed = runCli(['run', 'clean', '--apply'], repoRoot, {}, true);
     assert.equal(failed.status, 1);
     assert.match(failed.stderr, /requires scope/);
@@ -3783,7 +3886,7 @@ test('clean --apply cannot combine --task and --all-stale', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const failed = runCli(['run', 'clean', '--apply', '--task', 'Anything', '--all-stale'], repoRoot, {}, true);
     assert.equal(failed.status, 1);
     assert.match(failed.stderr, /cannot combine --task and --all-stale/);
@@ -3797,7 +3900,7 @@ test('clean --apply --task prunes just the named lock', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const keep = JSON.parse(runCli(['run', 'new', '--task', 'Keep Me', '--json'], repoRoot).stdout);
     const drop = JSON.parse(runCli(['run', 'new', '--task', 'Drop Me', '--json'], repoRoot).stdout);
 
@@ -3819,7 +3922,7 @@ test('clean --apply --task prunes just the named lock', () => {
     assert.deepEqual(envelope.removed, ['drop-me']);
 
     // keep-me's lock file must still exist.
-    const keepLockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'keep-me.json');
+    const keepLockPath = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks', 'keep-me.json');
     assert.ok(existsSync(keepLockPath), 'targeted prune did not touch keep-me');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
@@ -3831,7 +3934,7 @@ test('clean --apply --task prunes a lock whose worktree + branch are still intac
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const drop = JSON.parse(runCli(['run', 'new', '--task', 'Drop Live', '--json'], repoRoot).stdout);
 
     // Intentionally DO NOT delete the worktree or branch. --task should
@@ -3845,7 +3948,7 @@ test('clean --apply --task prunes a lock whose worktree + branch are still intac
     assert.match(envelope.message, /Pruned task locks/);
 
     // Lock file is gone.
-    const dropLockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'drop-live.json');
+    const dropLockPath = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks', 'drop-live.json');
     assert.ok(!existsSync(dropLockPath), 'targeted prune did not delete the lock file');
 
     // Worktree and branch are untouched — prune is metadata-only.
@@ -3865,7 +3968,7 @@ test('clean --apply --all-stale skips locks whose worktree + branch are still in
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const live = JSON.parse(runCli(['run', 'new', '--task', 'Still Live', '--json'], repoRoot).stdout);
 
     // Keep worktree + branch. --all-stale must refuse this one.
@@ -3874,7 +3977,7 @@ test('clean --apply --all-stale skips locks whose worktree + branch are still in
     });
     const envelope = JSON.parse(result.stdout);
     assert.deepEqual(envelope.removed, []);
-    const liveLockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'still-live.json');
+    const liveLockPath = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks', 'still-live.json');
     assert.ok(existsSync(liveLockPath), '--all-stale should not touch live locks');
     // Silence the unused-variable warning by referencing `live` — the intent
     // is to keep `new` running so the lock/worktree/branch are real.
@@ -3889,7 +3992,7 @@ test('slugifyTaskName preserves task names well beyond the old 32-char cap', () 
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     // 47 chars — would have been truncated to "long-task-name-that-exceeds-the-" under the
     // old .slice(0, 32) cap, dropping "old-cap" entirely.
     const longName = 'long task name that exceeds the old cap';
@@ -3897,7 +4000,7 @@ test('slugifyTaskName preserves task names well beyond the old 32-char cap', () 
     assert.equal(created.taskSlug, 'long-task-name-that-exceeds-the-old-cap');
     assert.match(created.worktreePath, /long-task-name-that-exceeds-the-old-cap-[0-9a-f]{4}$/);
 
-    const lockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'long-task-name-that-exceeds-the-old-cap.json');
+    const lockPath = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks', 'long-task-name-that-exceeds-the-old-cap.json');
     assert.ok(existsSync(lockPath), 'lock filename should preserve the full slug');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
@@ -3909,7 +4012,7 @@ test('slugifyTaskName throws with an actionable error when the slug exceeds the 
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     // 200 chars, all letters — slugifies to 200 chars (well over the 128 cap).
     // The old behavior silently truncated to 128; the new behavior throws so
     // the operator can shorten the name instead of getting a mangled lock.
@@ -3929,7 +4032,7 @@ test('slugifyTaskName accepts a slug exactly at the max length', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     // 128 alphanumeric chars — after slugify is exactly 128 chars, the boundary.
     const rightAtCap = 'a'.repeat(128);
     const created = JSON.parse(runCli(['run', 'new', '--task', rightAtCap, '--json'], repoRoot).stdout);
@@ -3945,7 +4048,7 @@ test('clean --apply refuses to prune locks with a missing or unparseable updated
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Corrupt Meta', '--json'], repoRoot).stdout);
 
     execFileSync('git', ['worktree', 'remove', '--force', created.worktreePath], {
@@ -3959,7 +4062,7 @@ test('clean --apply refuses to prune locks with a missing or unparseable updated
 
     // Corrupt the lock: remove updatedAt so lockAge() returns null. The
     // pruner must fail closed and skip, not sweep.
-    const lockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'corrupt-meta.json');
+    const lockPath = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks', 'corrupt-meta.json');
     const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
     delete lock.updatedAt;
     writeFileSync(lockPath, JSON.stringify(lock, null, 2), 'utf8');
@@ -3980,7 +4083,7 @@ test('clean --apply refuses to prune locks younger than 5 minutes', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Too Young', '--json'], repoRoot).stdout);
 
     // Kill the worktree + branch so the lock looks dead, but leave the
@@ -4001,7 +4104,7 @@ test('clean --apply refuses to prune locks younger than 5 minutes', () => {
     assert.equal(envelope.skipped[0].taskSlug, 'too-young');
     assert.match(envelope.skipped[0].reason, /below the 300s prune floor/);
     // The lock file should still exist.
-    const lockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'too-young.json');
+    const lockPath = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks', 'too-young.json');
     assert.ok(existsSync(lockPath), 'young lock kept');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
@@ -4009,9 +4112,9 @@ test('clean --apply refuses to prune locks younger than 5 minutes', () => {
   }
 });
 
-test('dashboard proxies workflow:api routes and persists local board settings', async () => {
+test('dashboard proxies pipelane:api routes and persists local board settings', async () => {
   const repoRoot = createRepo();
-  const fakeBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-dashboard-bin-'));
+  const fakeBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-dashboard-bin-'));
   const fixtureFile = path.join(fakeBin, 'workflow-api-fixture.json');
   const fixture = makeDashboardFixture();
   const env = {
@@ -4029,7 +4132,7 @@ test('dashboard proxies workflow:api routes and persists local board settings', 
     server = await startDashboardServer(repoRoot, env);
 
     const health = await fetch(`${server.baseUrl}/api/health`).then((response) => response.json());
-    assert.equal(health.workflowApiConfigured, true);
+    assert.equal(health.pipelaneApiConfigured, true);
     assert.equal(health.repoExists, true);
     assert.ok(health.settingsPath);
 
@@ -4060,16 +4163,16 @@ test('dashboard proxies workflow:api routes and persists local board settings', 
     assert.equal(savedSettings.preferredPort, 4044);
 
     const snapshot = await fetch(`${server.baseUrl}/api/snapshot`).then((response) => response.json());
-    assert.equal(snapshot.command, 'workflow.api.snapshot');
+    assert.equal(snapshot.command, 'pipelane.api.snapshot');
     assert.equal(snapshot.data.branches[0].name, 'codex/pipeline-board-1234');
 
     const branch = await fetch(`${server.baseUrl}/api/branch/${encodeURIComponent('codex/pipeline-board-1234')}`).then((response) => response.json());
-    assert.equal(branch.command, 'workflow.api.branch');
+    assert.equal(branch.command, 'pipelane.api.branch');
     assert.equal(branch.data.branchFiles[0].path, 'src/dashboard.ts');
     assert.equal(branch.data.workspaceFiles[1].patchAvailable, false);
 
     const patch = await fetch(`${server.baseUrl}/api/branch/${encodeURIComponent('codex/pipeline-board-1234')}/patch?file=${encodeURIComponent('src/dashboard.ts')}&scope=branch`).then((response) => response.json());
-    assert.equal(patch.command, 'workflow.api.branch.patch');
+    assert.equal(patch.command, 'pipelane.api.branch.patch');
     assert.match(patch.data.patch, /console\.log\("new"\)/);
 
     const preflightResponse = await fetch(`${server.baseUrl}/api/action/${encodeURIComponent('deploy.staging')}/preflight`, {
@@ -4122,7 +4225,7 @@ async function runCliAsync(args, cwd, env = {}) {
   return { status: code ?? 0, stdout, stderr };
 }
 
-test('pipelane detects a running dashboard and skips spawning a second one', async () => {
+test('board detects a running dashboard and skips spawning a second one', async () => {
   const repoRoot = createRepo();
   const port = await getFreePort();
   const probeHits = [];
@@ -4142,7 +4245,7 @@ test('pipelane detects a running dashboard and skips spawning a second one', asy
 
   try {
     const result = await runCliAsync(
-      ['pipelane', '--repo', repoRoot, '--port', String(port)],
+      ['board', '--repo', repoRoot, '--port', String(port)],
       repoRoot,
       { PIPELANE_OPEN_COMMAND: 'skip' },
     );
@@ -4157,13 +4260,13 @@ test('pipelane detects a running dashboard and skips spawning a second one', asy
   }
 });
 
-test('pipelane status reports unreachable port and no PID file', async () => {
+test('board status reports unreachable port and no PID file', async () => {
   const repoRoot = createRepo();
   const port = await getFreePort();
 
   try {
     const result = runCli(
-      ['pipelane', 'status', '--repo', repoRoot, '--port', String(port)],
+      ['board', 'status', '--repo', repoRoot, '--port', String(port)],
       repoRoot,
     );
 
@@ -4310,14 +4413,14 @@ test('api snapshot emits a wire-compatible envelope', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     runCli(['run', 'new', '--task', 'Snapshot Task', '--json'], repoRoot);
 
     const result = runCli(['run', 'api', 'snapshot'], repoRoot);
     const envelope = JSON.parse(result.stdout);
 
     assert.equal(envelope.schemaVersion, '2026-04-18');
-    assert.equal(envelope.command, 'workflow.api.snapshot');
+    assert.equal(envelope.command, 'pipelane.api.snapshot');
     assert.equal(envelope.ok, true);
     assert.ok(Array.isArray(envelope.warnings));
     assert.ok(Array.isArray(envelope.issues));
@@ -4355,11 +4458,11 @@ test('api snapshot marks staging as bypassed in build mode', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     // Force a merged PR state so staging/production lanes are computed
     // beyond the "awaiting_preflight" fast-path.
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Bypass Check', '--json'], repoRoot).stdout);
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     mkdirSync(path.dirname(prStatePath), { recursive: true });
     writeFileSync(prStatePath, JSON.stringify({
       records: {
@@ -4386,15 +4489,89 @@ test('api snapshot marks staging as bypassed in build mode', () => {
   }
 });
 
+test('api branch detail and patch commands emit real committed and workspace diffs', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt pipelane');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Branch Detail', '--json'], repoRoot).stdout);
+
+    const committedFile = path.join(created.worktreePath, 'src', 'feature-status.txt');
+    mkdirSync(path.dirname(committedFile), { recursive: true });
+    writeFileSync(committedFile, 'committed change\n', 'utf8');
+    execFileSync('git', ['add', 'src/feature-status.txt'], {
+      cwd: created.worktreePath,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    execFileSync('git', ['commit', '-m', 'Add committed branch file'], {
+      cwd: created.worktreePath,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const readmePath = path.join(created.worktreePath, 'README.md');
+    writeFileSync(readmePath, `${readFileSync(readmePath, 'utf8').trimEnd()}\nworkspace change\n`, 'utf8');
+    writeFileSync(path.join(created.worktreePath, 'notes.txt'), 'scratch notes\n', 'utf8');
+
+    const details = JSON.parse(runCli(['run', 'api', 'branch', '--branch', created.branch], repoRoot).stdout);
+    assert.equal(details.command, 'pipelane.api.branch');
+    assert.equal(details.data.branch.name, created.branch);
+    assert.ok(details.data.branchFiles.find((entry) =>
+      entry.path === 'src/feature-status.txt'
+      && entry.scope === 'branch'
+      && entry.patchAvailable === true));
+    assert.ok(details.data.workspaceFiles.find((entry) =>
+      entry.path === 'README.md'
+      && entry.scope === 'workspace'
+      && entry.patchAvailable === true));
+    assert.ok(details.data.workspaceFiles.find((entry) =>
+      entry.path === 'notes.txt'
+      && entry.scope === 'workspace'
+      && entry.patchAvailable === false
+      && /untracked/i.test(entry.reason)));
+
+    const branchPatch = JSON.parse(runCli([
+      'run', 'api', 'branch',
+      '--branch', created.branch,
+      '--patch',
+      '--file', 'src/feature-status.txt',
+      '--scope', 'branch',
+    ], repoRoot).stdout);
+    assert.equal(branchPatch.command, 'pipelane.api.branch.patch');
+    assert.match(branchPatch.data.patch, /\+committed change/);
+
+    const workspacePatch = JSON.parse(runCli([
+      'run', 'api', 'branch',
+      '--branch', created.branch,
+      '--patch',
+      '--file', 'README.md',
+      '--scope', 'workspace',
+    ], repoRoot).stdout);
+    assert.match(workspacePatch.data.patch, /\+workspace change/);
+
+    const untrackedPatch = JSON.parse(runCli([
+      'run', 'api', 'branch',
+      '--branch', created.branch,
+      '--patch',
+      '--file', 'notes.txt',
+      '--scope', 'workspace',
+    ], repoRoot).stdout);
+    assert.equal(untrackedPatch.data.patch, '');
+    assert.match(untrackedPatch.data.reason, /untracked/i);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
 test('api action preflight: non-risky action returns no confirmation', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     const envelope = JSON.parse(runCli(['run', 'api', 'action', 'resume'], repoRoot).stdout);
     assert.equal(envelope.schemaVersion, '2026-04-18');
-    assert.equal(envelope.command, 'workflow.api.action');
+    assert.equal(envelope.command, 'pipelane.api.action');
     assert.equal(envelope.data.action.id, 'resume');
     assert.equal(envelope.data.action.risky, false);
     assert.equal(envelope.data.preflight.requiresConfirmation, false);
@@ -4409,7 +4586,7 @@ test('api action preflight: risky action issues a confirmation token', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     const envelope = JSON.parse(runCli(['run', 'api', 'action', 'merge'], repoRoot).stdout);
     assert.equal(envelope.data.action.risky, true);
@@ -4426,7 +4603,7 @@ test('api action execute: risky action rejects missing or bad tokens', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     const noToken = runCli(['run', 'api', 'action', 'merge', '--execute'], repoRoot, {}, true);
     assert.equal(noToken.status, 1);
@@ -4453,7 +4630,7 @@ test('api action execute: risky action accepts a matching confirm token and runs
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     // clean.apply now requires scope. Pass --all-stale so the preflight is
     // allowed and the confirm token binds to that scope via the fingerprint.
@@ -4481,7 +4658,7 @@ test('api action preflight: clean.apply without scope returns allowed:false stat
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     const result = runCli(['run', 'api', 'action', 'clean.apply'], repoRoot, {}, true);
     // Envelope is emitted even when preflight is blocked; exit is non-zero.
@@ -4503,7 +4680,7 @@ test('api action execute: non-risky action runs without a token', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     const executed = runCli(['run', 'api', 'action', 'clean.plan', '--execute'], repoRoot);
     const envelope = JSON.parse(executed.stdout);
@@ -4516,10 +4693,10 @@ test('api action execute: non-risky action runs without a token', () => {
   }
 });
 
-test('pipelane help prints subcommand list', () => {
-  const result = runCli(['pipelane', '--help'], process.cwd());
+test('board help prints subcommand list', () => {
+  const result = runCli(['board', '--help'], process.cwd());
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /Usage: workflow-kit pipelane/);
+  assert.match(result.stdout, /Usage: pipelane board/);
   assert.match(result.stdout, /start Pipelane Board/);
   assert.match(result.stdout, /stop the Pipelane Board/);
   assert.match(result.stdout, /--no-open/);
@@ -4631,7 +4808,7 @@ test('configure leaves sections outside Deploy Configuration untouched', () => {
   }
 });
 
-test('configure seeds CLAUDE.md from the workflow template when it is missing', () => {
+test('configure seeds CLAUDE.md from the Pipelane template when it is missing', () => {
   const repoRoot = createRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -4668,23 +4845,20 @@ test('configure errors on unknown flag instead of silently ignoring it', () => {
   }
 });
 
-test('setup installs workflow:configure + pipelane:configure scripts and rewrites devmode.md pointer', () => {
+test('setup installs the pipelane:configure script and rewrites devmode.md pointer', () => {
   const repoRoot = createRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     runCli(['setup'], repoRoot);
 
     const pkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
-    assert.equal(pkg.scripts['workflow:configure'], 'pipelane configure');
     assert.equal(pkg.scripts['pipelane:configure'], 'pipelane configure');
 
     const devmode = readFileSync(path.join(repoRoot, '.claude', 'commands', 'devmode.md'), 'utf8');
-    // The devmode slash command previously told operators to run
-    // `npm run workflow:setup`, which Rocketboard (and any consumer with
-    // `syncDocs.packageScripts: false`) doesn't define. Now it points at the
-    // scoped `workflow:configure` entry that configure.ts wires in.
-    assert.match(devmode, /npm run workflow:configure/);
-    assert.doesNotMatch(devmode, /run `npm run workflow:setup`/);
+    // The devmode slash command points operators at the scoped
+    // `pipelane:configure` entry that configure.ts wires in.
+    assert.match(devmode, /npm run pipelane:configure/);
+    assert.doesNotMatch(devmode, /run `npm run pipelane:setup`/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -4808,10 +4982,10 @@ test('configure --help prints usage and does not modify CLAUDE.md', () => {
   }
 });
 
-test('configure throws when seeding a missing CLAUDE.md without a .project-workflow.json', () => {
+test('configure throws when seeding a missing CLAUDE.md without a .pipelane.json', () => {
   const repoRoot = createRepo();
   try {
-    // Deliberately skip `init` — no .project-workflow.json present.
+    // Deliberately skip `init` — no .pipelane.json present.
     // CLAUDE.md is also missing. configure must refuse to seed from template
     // because it has no displayName / aliases to render, matching
     // setupConsumerRepo's strict invariant.
@@ -4900,13 +5074,13 @@ test('configure without --json errors when stdin is not a TTY', () => {
   }
 });
 
-test('setup consistency check requires workflow:configure when opting out of packageScripts', () => {
+test('setup consistency check requires pipelane:configure when opting out of packageScripts', () => {
   // Regression for Codex #4: the required-scripts list now includes
-  // workflow:configure because devmode.md points operators at it. A consumer
-  // who defines every workflow:<cmd> script EXCEPT workflow:configure would
+  // pipelane:configure because devmode.md points operators at it. A consumer
+  // who defines every pipelane:<cmd> script EXCEPT pipelane:configure would
   // previously pass setup silently; now they get a clear error.
   const repoRoot = createRepo();
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
 
@@ -4916,27 +5090,27 @@ test('setup consistency check requires workflow:configure when opting out of pac
       private: true,
       type: 'module',
       scripts: {
-        'workflow:new': 'x new',
-        'workflow:resume': 'x resume',
-        'workflow:pr': 'x pr',
-        'workflow:merge': 'x merge',
-        'workflow:deploy': 'x deploy',
-        'workflow:clean': 'x clean',
-        'workflow:devmode': 'x devmode',
-        'workflow:status': 'x status',
-        'workflow:doctor': 'x doctor',
-        // Deliberately missing workflow:configure
+        'pipelane:new': 'x new',
+        'pipelane:resume': 'x resume',
+        'pipelane:pr': 'x pr',
+        'pipelane:merge': 'x merge',
+        'pipelane:deploy': 'x deploy',
+        'pipelane:clean': 'x clean',
+        'pipelane:devmode': 'x devmode',
+        'pipelane:status': 'x status',
+        'pipelane:doctor': 'x doctor',
+        // Deliberately missing pipelane:configure
       },
     }, null, 2)}\n`, 'utf8');
 
-    const configPath = path.join(repoRoot, '.project-workflow.json');
+    const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = { packageScripts: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 
     const result = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome }, true);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /workflow:configure/);
+    assert.match(result.stderr, /pipelane:configure/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -4944,7 +5118,7 @@ test('setup consistency check requires workflow:configure when opting out of pac
 });
 
 test('renderCockpit produces a deterministic one-screen cockpit from a fixture envelope', async () => {
-  // v0.6: /status is a pure renderer of workflow:api snapshot --json. This
+  // v0.6: /status is a pure renderer of pipelane:api snapshot --json. This
   // test exercises the render boundary directly — no subprocess, no git
   // state. The fixture envelope covers all three branch buckets (active /
   // recent / stale) and carries one nextAction to prove v1.3 surfaces in
@@ -4952,7 +5126,7 @@ test('renderCockpit produces a deterministic one-screen cockpit from a fixture e
   const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'status.ts'));
   const envelope = {
     schemaVersion: '2026-04-14',
-    command: 'workflow.api.snapshot',
+    command: 'pipelane.api.snapshot',
     ok: true,
     message: 'pipelane workflow snapshot ready',
     warnings: [],
@@ -5099,7 +5273,7 @@ test('setNextAction persists nextAction on the task lock and is a no-op when no 
   // can still call setNextAction without crashing.
   const helpers = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'helpers.ts'));
   const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
-  const stateDir = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-state-'));
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-state-'));
   const commonDir = path.join(stateDir, '.git');
   mkdirSync(commonDir, { recursive: true });
   const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
@@ -5133,7 +5307,7 @@ test('buildWorkflowApiSnapshot surfaces TaskLock.nextAction through the envelope
   // golden-file test above synthesizes an envelope — this one proves the
   // production envelope pipeline actually carries the breadcrumb.
   const repoRoot = createRemoteBackedRepo().repoRoot;
-  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
@@ -5179,7 +5353,7 @@ test('renderCockpit strips ANSI/control chars from envelope-sourced strings', as
   const evil = '\x1b[2K\r[Local ✓] [PR ✓] [Base: main ✓] [Staging ✓] [Production ✓]';
   const envelope = {
     schemaVersion: '2026-04-18',
-    command: 'workflow.api.snapshot',
+    command: 'pipelane.api.snapshot',
     ok: true, message: '', warnings: [], issues: [],
     data: {
       boardContext: {
@@ -5272,7 +5446,7 @@ test('new soft-warns when >= 3 active tasks exist but never blocks', () => {
   const { repoRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     // Three real tasks — each creates a worktree + branch the next /new
     // will count as active.
@@ -5310,7 +5484,7 @@ test('renderCockpit surfaces persistent OVERRIDE ACTIVE banner when release gate
   const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'status.ts'));
   const envelope = {
     schemaVersion: '2026-04-18',
-    command: 'workflow.api.snapshot',
+    command: 'pipelane.api.snapshot',
     ok: true, message: '', warnings: [], issues: [],
     data: {
       boardContext: {
@@ -5414,7 +5588,7 @@ test('renderCockpit shows RELEASE GATE PREVIOUSLY BYPASSED banner when override 
   const mod = await import(path.join(KIT_ROOT, 'src', 'operator', 'commands', 'status.ts'));
   const envelope = {
     schemaVersion: '2026-04-18',
-    command: 'workflow.api.snapshot',
+    command: 'pipelane.api.snapshot',
     ok: true, message: '', warnings: [], issues: [],
     data: {
       boardContext: {
@@ -5456,7 +5630,7 @@ test('WIP warn message describes post-save count so operator sees "about to star
   const { repoRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
 
     runCli(['run', 'new', '--task', 'alpha'], repoRoot);
     runCli(['run', 'new', '--task', 'bravo'], repoRoot);
@@ -5499,7 +5673,7 @@ test('setBy whitelist allows GitHub bot actors like dependabot[bot]', async () =
 // ---------------------------------------------------------------------------
 
 function writeStaleProbeState(repoRoot, surfaces, { ageMs = 25 * 60 * 60 * 1000, ok = true } = {}) {
-  const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+  const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
   mkdirSync(stateDir, { recursive: true });
   const probedAt = new Date(Date.now() - ageMs).toISOString();
   const records = surfaces.map((surface) => ({
@@ -5638,7 +5812,7 @@ test('doctor --fix via PIPELANE_DOCTOR_FIX_STUB writes the Deploy Configuration 
     assert.match(claude, /"platform": "fly.io"/);
     assert.match(claude, /"url": "https:\/\/staging.example.test"/);
 
-    const probeStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'probe-state.json');
+    const probeStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'probe-state.json');
     assert.ok(existsSync(probeStatePath), 'probe-state.json created by --fix auto-probe');
     const probe = JSON.parse(readFileSync(probeStatePath, 'utf8'));
     const frontend = probe.records.find((r) => r.environment === 'staging' && r.surface === 'frontend');
@@ -5666,7 +5840,7 @@ test('release-check blocks when staging probe is stale (>24h old)', async () => 
     assert.equal(result.status, 1);
     assert.equal(output.ready, false);
     assert.match(output.message, /probe is stale/);
-    assert.match(output.message, /workflow:doctor --probe/);
+    assert.match(output.message, /pipelane:doctor --probe/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -5684,7 +5858,7 @@ test('doctor.listMissingFields reports platform + frontend staging + production 
   assert.deepEqual(doctor.listMissingFields(full), [], 'full config reports no gaps');
 });
 
-test('workflow:api snapshot surfaces probeState rollup + deployProbe.* sourceHealth + probe attention', async () => {
+test('pipelane:api snapshot surfaces probeState rollup + deployProbe.* sourceHealth + probe attention', async () => {
   const repoRoot = createRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
@@ -5754,7 +5928,7 @@ function v14StubConfig() {
     projectKey: 'fixture',
     displayName: 'Fixture',
     baseBranch: 'main',
-    stateDir: 'workflow-kit-state',
+    stateDir: 'pipelane-state',
     taskWorktreeDirName: 'fixture-worktrees',
     branchPrefix: 'codex/',
     legacyBranchPrefixes: [],
@@ -5769,7 +5943,7 @@ function v14StubConfig() {
 }
 
 function v14SeedState(commonDir, { deployRecords = null, taskLocks = [], prRecords = {} } = {}) {
-  const stateDir = path.join(commonDir, 'workflow-kit-state');
+  const stateDir = path.join(commonDir, 'pipelane-state');
   mkdirSync(stateDir, { recursive: true });
   if (deployRecords !== null) {
     writeFileSync(path.join(stateDir, 'deploy-state.json'), JSON.stringify({ records: deployRecords }, null, 2), 'utf8');
@@ -6058,7 +6232,7 @@ test('v1.4 /resume surfaces TaskLock.nextAction breadcrumb when set by a prior c
     commitAll(repoRoot, 'post-setup');
     runCli(['run', 'new', '--task', 'Resume Demo'], repoRoot);
     // Simulate a prior /pr that wrote a breadcrumb into the lock.
-    const lockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', 'resume-demo.json');
+    const lockPath = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks', 'resume-demo.json');
     const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
     lock.nextAction = 'PR #7 open, awaiting CI';
     writeFileSync(lockPath, JSON.stringify(lock, null, 2), 'utf8');
@@ -6183,7 +6357,7 @@ test('v1.4 /resume --json multi-lock emits activeLocks[] with per-lock lockNextA
     commitAll(repoRoot, 'post-setup');
     runCli(['run', 'new', '--task', 'Task A'], repoRoot);
     runCli(['run', 'new', '--task', 'Task B'], repoRoot);
-    const locksDir = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks');
+    const locksDir = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks');
     const a = JSON.parse(readFileSync(path.join(locksDir, 'task-a.json'), 'utf8'));
     a.nextAction = 'CI running';
     writeFileSync(path.join(locksDir, 'task-a.json'), JSON.stringify(a), 'utf8');
@@ -6261,7 +6435,7 @@ test('v1.1 findLastGoodDeploy picks the most recent succeeded+verified record ex
 
 test('v1.1 /rollback staging dispatches + verifies + persists rollbackOfSha', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6273,7 +6447,7 @@ test('v1.1 /rollback staging dispatches + verifies + persists rollbackOfSha', ()
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Rollback Me', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v1.txt'), 'good\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Rollback Me', '--json'], created.worktreePath, env);
@@ -6284,7 +6458,7 @@ test('v1.1 /rollback staging dispatches + verifies + persists rollbackOfSha', ()
     // committed to the worktree branch so deploy/rollback have real
     // commits to work against.
     const goodSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.worktreePath, encoding: 'utf8' }).trim();
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
     const prKey = Object.keys(prState.records)[0];
     prState.records[prKey].mergedSha = goodSha;
@@ -6314,7 +6488,7 @@ test('v1.1 /rollback staging dispatches + verifies + persists rollbackOfSha', ()
     assert.equal(rollback.rollbackOfSha, brokenSha);
 
     // nextAction breadcrumb should reflect the rollback.
-    const lockPath = path.join(repoRoot, '.git', 'workflow-kit-state', 'task-locks', created.taskSlug + '.json');
+    const lockPath = path.join(repoRoot, '.git', 'pipelane-state', 'task-locks', created.taskSlug + '.json');
     const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
     assert.match(lock.nextAction, /staging rolled back/);
   } finally {
@@ -6326,7 +6500,7 @@ test('v1.1 /rollback staging dispatches + verifies + persists rollbackOfSha', ()
 
 test('v1.1 /rollback refuses with a clear error when no earlier succeeded deploy exists', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6338,7 +6512,7 @@ test('v1.1 /rollback refuses with a clear error when no earlier succeeded deploy
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Fresh Repo', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v1.txt'), 'v1\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Fresh Repo', '--json'], created.worktreePath, env);
@@ -6366,7 +6540,7 @@ test('v1.1 rollback.* action registry — rollback.prod risky, rollback.staging 
 
 test('v1.1 api action rollback.prod preflight issues a confirm-token, execute rejects bogus tokens', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6377,7 +6551,7 @@ test('v1.1 api action rollback.prod preflight issues a confirm-token, execute re
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Confirm Binding', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Confirm Binding', '--json'], created.worktreePath, env);
@@ -6411,7 +6585,7 @@ test('v1.1 api action rollback.prod preflight issues a confirm-token, execute re
 
 test('v1.1 /rollback --revert-pr opens a gh PR without pushing to main', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6423,7 +6597,7 @@ test('v1.1 /rollback --revert-pr opens a gh PR without pushing to main', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Revert Me', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'v1\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Revert Me', '--json'], created.worktreePath, env);
@@ -6437,7 +6611,7 @@ test('v1.1 /rollback --revert-pr opens a gh PR without pushing to main', () => {
     writeFileSync(path.join(repoRoot, 'squash.txt'), 'v1\n', 'utf8');
     commitAll(repoRoot, 'squash: Revert Me');
     const realMergeSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
     const key = Object.keys(prState.records)[0];
     prState.records[key].mergedSha = realMergeSha;
@@ -6468,7 +6642,7 @@ test('v1.1 /rollback --revert-pr opens a gh PR without pushing to main', () => {
 
 test('v1.1 --revert-pr refuses outside release mode', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6480,7 +6654,7 @@ test('v1.1 --revert-pr refuses outside release mode', () => {
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Build Mode', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Build Mode', '--json'], created.worktreePath, env);
@@ -6534,7 +6708,7 @@ test('v1.1 fixup: findLastGoodDeploy honors configFingerprint when set', async (
 
 test('v1.1 fixup: re-running /rollback after a successful rollback refuses (cascade guard)', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6545,14 +6719,14 @@ test('v1.1 fixup: re-running /rollback after a successful rollback refuses (casc
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Cascade', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v1.txt'), 'good\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Cascade', '--json'], created.worktreePath, env);
     runCli(['run', 'merge', '--json'], created.worktreePath, env);
     // Swap fake-gh's deadbeef merge for a real sha so the R4 gate passes.
     const goodSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.worktreePath, encoding: 'utf8' }).trim();
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
     prState.records[Object.keys(prState.records)[0]].mergedSha = goodSha;
     writeFileSync(prStatePath, JSON.stringify(prState, null, 2), 'utf8');
@@ -6582,7 +6756,7 @@ test('v1.1 fixup: re-running /rollback after a successful rollback refuses (casc
 
 test('v1.1 fixup: --revert-pr rejects a malformed mergedSha before any git op', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6593,7 +6767,7 @@ test('v1.1 fixup: --revert-pr rejects a malformed mergedSha before any git op', 
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Sha Inject', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Sha Inject', '--json'], created.worktreePath, env);
@@ -6601,7 +6775,7 @@ test('v1.1 fixup: --revert-pr rejects a malformed mergedSha before any git op', 
     runCli(['run', 'devmode', 'release', '--override', '--reason', 'revert-pr-sha-test', '--json'], created.worktreePath);
 
     // Plant a flag-shaped "sha" to simulate pr-state.json tampering.
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
     prState.records[Object.keys(prState.records)[0]].mergedSha = '--force-with-lease';
     writeFileSync(prStatePath, JSON.stringify(prState, null, 2), 'utf8');
@@ -6618,7 +6792,7 @@ test('v1.1 fixup: --revert-pr rejects a malformed mergedSha before any git op', 
 
 test('v1.1 fixup: --revert-pr refuses with a dirty worktree before switching branches', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6629,7 +6803,7 @@ test('v1.1 fixup: --revert-pr refuses with a dirty worktree before switching bra
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Dirty Worktree', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Dirty Worktree', '--json'], created.worktreePath, env);
@@ -6659,7 +6833,7 @@ test('v1.1 fixup: --revert-pr refuses with a dirty worktree before switching bra
 // on the wrong rollback.
 test('v1.1 codex fixup: rollback.* preflight surface fallback matches execute (task lock wins)', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6670,7 +6844,7 @@ test('v1.1 codex fixup: rollback.* preflight surface fallback matches execute (t
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     // Task lock only covers frontend. Config surfaces = [frontend, edge, sql].
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Narrow', '--surfaces', 'frontend', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
@@ -6681,7 +6855,7 @@ test('v1.1 codex fixup: rollback.* preflight surface fallback matches execute (t
     // (the lock's surfaces) and one matching the full config surfaces.
     // Distinct shas so preflight/execute drift would produce visibly
     // different targetSha in normalizedInputs.
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     mkdirSync(stateDir, { recursive: true });
     // Need an OLDER good record + NEWER current record for each surface
     // set so findLastGoodDeploy has something to target (excludeSha skips
@@ -6728,7 +6902,7 @@ test('v1.1 codex fixup: rollback.* preflight surface fallback matches execute (t
 // used prRecord.mergedSha or the base-branch tip.
 test('v1.1 codex fixup: --revert-pr honors --sha when passed explicitly', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6739,7 +6913,7 @@ test('v1.1 codex fixup: --revert-pr honors --sha when passed explicitly', () => 
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Explicit Sha', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'v1\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Explicit Sha', '--json'], created.worktreePath, env);
@@ -6756,7 +6930,7 @@ test('v1.1 codex fixup: --revert-pr honors --sha when passed explicitly', () => 
     writeFileSync(path.join(repoRoot, 'newer.txt'), 'newer\n', 'utf8');
     commitAll(repoRoot, 'newer change');
     const newerSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
     prState.records[Object.keys(prState.records)[0]].mergedSha = newerSha;
     writeFileSync(prStatePath, JSON.stringify(prState, null, 2), 'utf8');
@@ -6783,7 +6957,7 @@ test('v1.1 codex fixup: --revert-pr honors --sha when passed explicitly', () => 
 // API bypass via PIPELANE_DEPLOY_PROD_API_CONFIRMED is still honored.
 test('v1.1 codex fixup: /rollback prod requires typed-SHA confirmation in build mode too', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -6796,7 +6970,7 @@ test('v1.1 codex fixup: /rollback prod requires typed-SHA confirmation in build 
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     // Stay in build mode (default after init).
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Build Mode Prod', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
@@ -6804,12 +6978,12 @@ test('v1.1 codex fixup: /rollback prod requires typed-SHA confirmation in build 
     runCli(['run', 'merge', '--json'], created.worktreePath, env);
     // Swap fake-gh's bogus merge for a real sha.
     const goodSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.worktreePath, encoding: 'utf8' }).trim();
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
     prState.records[Object.keys(prState.records)[0]].mergedSha = goodSha;
     writeFileSync(prStatePath, JSON.stringify(prState, null, 2), 'utf8');
     // Seed deploy state with a good prod + a failed prod to roll back FROM.
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     const okProbe = { statusCode: 200, latencyMs: 10, probes: 2 };
     // verificationBySurface is required for multi-surface rollbacks
     // per r6 P2 fix (legacy aggregate probes only qualify for
@@ -6946,7 +7120,7 @@ test('v1.1 fixup: capDeployHistory preserves the most recent verified record per
 // the operator isn't permanently locked out.
 test('v1.1 claude r3 fixup: stale in-flight rollback request bypasses the guard, fresh one still blocks', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   // Generous threshold (60s) so the fresh-record block check doesn't race
@@ -6961,19 +7135,19 @@ test('v1.1 claude r3 fixup: stale in-flight rollback request bypasses the guard,
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Stale Guard', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Stale Guard', '--json'], created.worktreePath, baseEnv);
     runCli(['run', 'merge', '--json'], created.worktreePath, baseEnv);
     const goodSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.worktreePath, encoding: 'utf8' }).trim();
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
     prState.records[Object.keys(prState.records)[0]].mergedSha = goodSha;
     writeFileSync(prStatePath, JSON.stringify(prState, null, 2), 'utf8');
     runCli(['run', 'deploy', 'staging', '--json'], created.worktreePath, baseEnv);
 
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     const deployStatePath = path.join(stateDir, 'deploy-state.json');
 
     // --- Case 1: FRESH requested record (just now) blocks within 60s threshold.
@@ -7043,13 +7217,13 @@ test('v1.1 claude r2 fixup: /rollback refuses when a prior rollback is still in 
 // fell back to base-branch tip (wrong when unrelated commits landed).
 test('v1.1 claude r2 fixup: --revert-pr fails closed without --sha + without pr-state.mergedSha', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = { PATH: `${ghBin}:${process.env.PATH}`, GH_STATE_FILE: ghStateFile };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'No Merge', '--json'], repoRoot).stdout);
     // Skip merge entirely — no PrRecord with mergedSha gets written.
     runCli(['run', 'devmode', 'release', '--override', '--reason', 'r2-fallback-test', '--json'], created.worktreePath);
@@ -7072,7 +7246,7 @@ test('v1.1 claude r2 fixup: --revert-pr fails closed without --sha + without pr-
 // false-trigger the "branch already exists locally" guard.
 test('v1.1 claude r2 fixup: --revert-pr does not false-trigger on a same-name tag', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -7081,7 +7255,7 @@ test('v1.1 claude r2 fixup: --revert-pr does not false-trigger on a same-name ta
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Tag Collision', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Tag Collision', '--json'], created.worktreePath, env);
@@ -7126,7 +7300,7 @@ test('v1.1 claude r2 fixup: --revert-pr does not false-trigger on a same-name ta
 // dispatch and race the deploy.
 test('v1.1 codex r8 fixup: in-flight deploy blocks /rollback (not just in-flight rollbacks)', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = {
@@ -7138,20 +7312,20 @@ test('v1.1 codex r8 fixup: in-flight deploy blocks /rollback (not just in-flight
   };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Deploy In Flight', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Deploy In Flight', '--json'], created.worktreePath, env);
     runCli(['run', 'merge', '--json'], created.worktreePath, env);
     const goodSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: created.worktreePath, encoding: 'utf8' }).trim();
-    const prStatePath = path.join(repoRoot, '.git', 'workflow-kit-state', 'pr-state.json');
+    const prStatePath = path.join(repoRoot, '.git', 'pipelane-state', 'pr-state.json');
     const prState = JSON.parse(readFileSync(prStatePath, 'utf8'));
     prState.records[Object.keys(prState.records)[0]].mergedSha = goodSha;
     writeFileSync(prStatePath, JSON.stringify(prState, null, 2), 'utf8');
     runCli(['run', 'deploy', 'staging', '--json'], created.worktreePath, env);
 
     // Seed an in-flight DEPLOY record (not a rollback): requested, no rollbackOfSha.
-    const stateDir = path.join(repoRoot, '.git', 'workflow-kit-state');
+    const stateDir = path.join(repoRoot, '.git', 'pipelane-state');
     const deployStatePath = path.join(stateDir, 'deploy-state.json');
     const deployState = JSON.parse(readFileSync(deployStatePath, 'utf8'));
     deployState.records.push({
@@ -7190,13 +7364,13 @@ test('v1.1 codex r8 fixup: /rollback --async is explicitly refused', () => {
 // via -m 1, not just squash-merge single-parent commits.
 test('v1.1 codex r8 fixup: --revert-pr reverts a real merge commit with -m 1', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
-  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'workflow-kit-gh-'));
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
   const ghStateFile = path.join(ghBin, 'gh-state.json');
   writeFakeGh(ghBin, ghStateFile);
   const env = { PATH: `${ghBin}:${process.env.PATH}`, GH_STATE_FILE: ghStateFile };
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    commitAll(repoRoot, 'Adopt workflow-kit');
+    commitAll(repoRoot, 'Adopt pipelane');
     const created = JSON.parse(runCli(['run', 'new', '--task', 'Merge Commit Revert', '--json'], repoRoot).stdout);
     writeFileSync(path.join(created.worktreePath, 'v.txt'), 'x\n', 'utf8');
     runCli(['run', 'pr', '--title', 'Merge Commit Revert', '--json'], created.worktreePath, env);

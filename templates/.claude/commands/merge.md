@@ -1,10 +1,10 @@
-<!-- workflow-kit:command:merge -->
+<!-- pipelane:command:merge -->
 Merge the current task's pull request.
 
 Run:
 
 ```bash
-npm run workflow:merge -- $ARGUMENTS
+npm run pipelane:merge -- $ARGUMENTS
 ```
 
 This command:
@@ -16,5 +16,5 @@ This command:
 
 Display the output directly. Report the merged SHA and the next step.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->

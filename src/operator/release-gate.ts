@@ -203,8 +203,8 @@ export function renderDeployConfigSection(config: DeployConfig): string {
 This section is machine-readable. Keep the JSON valid.
 Release readiness is derived from (a) observed staging deploy records and (b) a
 fresh \`/doctor --probe\` that healthchecks the configured staging URLs. Run
-\`workflow:deploy -- staging <surface>\` once per surface to register a succeeded
-deploy, then \`workflow:doctor --probe\` to register liveness. Probes older than
+\`pipelane:deploy -- staging <surface>\` once per surface to register a succeeded
+deploy, then \`pipelane:doctor --probe\` to register liveness. Probes older than
 24h flip the release lane fail-closed.
 
 \`\`\`json
@@ -483,16 +483,16 @@ export function evaluateReleaseReadiness(options: {
   const observedStagingSuccess = (surface: string): string | null => {
     const result = explainObservedStagingSuccess(options.deployRecords, surface, gateOptions);
     if (result.ok) return null;
-    return `${surface} staging: ${result.reason}. Run \`workflow:deploy -- staging ${surface}\` first.`;
+    return `${surface} staging: ${result.reason}. Run \`pipelane:deploy -- staging ${surface}\` first.`;
   };
   const probeState = options.probeState ?? { records: [], updatedAt: '' };
   const probeFreshness = (surface: string): string | null => {
     const probe = explainSurfaceProbe({ probeState, surface, environment: 'staging' });
     if (probe.state === 'healthy') return null;
     if (probe.state === 'unknown') {
-      return `${surface} staging: no probe recorded. Run \`workflow:doctor --probe\`.`;
+      return `${surface} staging: no probe recorded. Run \`pipelane:doctor --probe\`.`;
     }
-    return `${surface} staging probe is ${probe.state}: ${probe.reason}. Re-run \`workflow:doctor --probe\`.`;
+    return `${surface} staging probe is ${probe.state}: ${probe.reason}. Re-run \`pipelane:doctor --probe\`.`;
   };
 
   for (const surface of options.surfaces) {
@@ -605,11 +605,11 @@ export function buildReleaseCheckMessage(readiness: ReturnType<typeof evaluateRe
       && readiness.results[surface].missing.every((reason) => reason.includes('no succeeded deploy observed')),
     );
     if (allObserveBlockers) {
-      lines.push('Next: run `npm run workflow:devmode -- build`, then `npm run workflow:deploy -- staging` once per surface,');
-      lines.push('then `npm run workflow:devmode -- release`. The readiness gate is observed, not asserted.');
+      lines.push('Next: run `npm run pipelane:devmode -- build`, then `npm run pipelane:deploy -- staging` once per surface,');
+      lines.push('then `npm run pipelane:devmode -- release`. The readiness gate is observed, not asserted.');
     } else {
-      lines.push('Next: run `npm run workflow:configure` to fill in the Deploy Configuration block in CLAUDE.md, then');
-      lines.push('`npm run workflow:devmode -- build` and `npm run workflow:deploy -- staging` to register a staging success.');
+      lines.push('Next: run `npm run pipelane:configure` to fill in the Deploy Configuration block in CLAUDE.md, then');
+      lines.push('`npm run pipelane:devmode -- build` and `npm run pipelane:deploy -- staging` to register a staging success.');
     }
   }
 

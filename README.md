@@ -1,8 +1,6 @@
-# pipelane
+# Pipelane
 
-> **pipelane** — the release cockpit for AI vibe coders.
-> _Formerly `workflow-kit`._ The `workflow-kit` name still works as a shim binary and
-> `workflow:*` npm scripts are retained as deprecation aliases for one release.
+> **Pipelane** — the release cockpit for AI vibe coders.
 
 `pipelane` is a standalone workflow package for repo-native release management.
 
@@ -50,7 +48,7 @@ more.
 
 The design choices are deliberate:
 
-- Repo-native commands are the source of truth. The AI can always fall back to `npm run workflow:*`.
+- Repo-native commands are the source of truth. The AI can always fall back to `npm run pipelane:*`.
 - Slash commands are thin adapters. Claude and Codex do not own the workflow logic.
 - Task workspaces are explicit and recoverable. `/new` creates a fresh isolated branch/worktree. `/resume` recovers it later.
 - `CLAUDE.md` stays local-only. Machine-specific deploy state does not leak into tracked repo policy.
@@ -71,8 +69,8 @@ follow it safely and a human can predict what will happen next.
 
 ## Pipelane Board
 
-`workflow-kit` ships a local reference dashboard — the **Pipelane Board** — for repos that expose
-a public `workflow:api` surface.
+`pipelane` ships a local reference dashboard — the **Pipelane Board** — for repos that expose
+a public `pipelane:api` surface.
 
 Run it against a target repo:
 
@@ -96,7 +94,7 @@ What it shows:
 Local settings are stored per repo in:
 
 ```text
-~/.workflow-kit/dashboard/<repo>-<hash>.json
+~/.pipelane/dashboard/<repo>-<hash>.json
 ```
 
 Use the board's Settings button to customize:
@@ -123,22 +121,22 @@ The default slash surface is:
 - `/deploy`
 - `/clean`
 
-Those names come from `.project-workflow.json` under `aliases`.
+Those names come from `.pipelane.json` under `aliases`.
 
 If you change them:
 
-- rerun `npm run workflow:setup`
+- rerun `npm run pipelane:setup`
 - each Codex user must rerun setup on their own machine
 - if Claude or Codex was already open, reopen the repo or restart the client so the new command names are picked up
 - aliases must be unique
 - setup fails closed if an alias would overwrite an unrelated Claude command or Codex skill
-- Codex resolves aliases per repo at runtime, so different workflow-kit repos can reuse the same alias name for different commands safely
+- Codex resolves aliases per repo at runtime, so different pipelane repos can reuse the same alias name for different commands safely
 
-Repo-native commands do not change. `npm run workflow:*` stays the fallback and source of truth.
+Repo-native commands do not change. `npm run pipelane:*` stays the fallback and source of truth.
 
 ## Two dev modes
 
-`workflow-kit` has two lanes.
+`pipelane` has two lanes.
 
 ### Build mode
 
@@ -187,11 +185,11 @@ When you want the fastest operator path, the user-facing journey is:
 The repo-native equivalents are:
 
 ```bash
-npm run workflow:devmode -- build
-npm run workflow:new -- --task "task name"
-npm run workflow:pr -- --title "PR title"
-npm run workflow:merge
-npm run workflow:clean
+npm run pipelane:devmode -- build
+npm run pipelane:new -- --task "task name"
+npm run pipelane:pr -- --title "PR title"
+npm run pipelane:merge
+npm run pipelane:clean
 ```
 
 Choose build mode when you want the repo to optimize for speed and a short handoff from merge to
@@ -218,13 +216,13 @@ When you want a protected staged release path, the user-facing journey is:
 The repo-native equivalents are:
 
 ```bash
-npm run workflow:devmode -- release
-npm run workflow:new -- --task "task name"
-npm run workflow:pr -- --title "PR title"
-npm run workflow:merge
-npm run workflow:deploy -- staging
-npm run workflow:deploy -- prod
-npm run workflow:clean
+npm run pipelane:devmode -- release
+npm run pipelane:new -- --task "task name"
+npm run pipelane:pr -- --title "PR title"
+npm run pipelane:merge
+npm run pipelane:deploy -- staging
+npm run pipelane:deploy -- prod
+npm run pipelane:clean
 ```
 
 Choose release mode when the repo needs explicit same-SHA staged promotion and a stricter release
@@ -242,38 +240,38 @@ gate.
 
 Canonical repo-native commands:
 
-- `npm run workflow:setup`
-- `npm run workflow:devmode -- ...`
-- `npm run workflow:new -- --task "<task-name>"`
-- `npm run workflow:resume -- --task "<task-name>"`
-- `npm run workflow:pr -- ...`
-- `npm run workflow:merge`
-- `npm run workflow:release-check`
-- `npm run workflow:task-lock -- verify --task "<task-name>"`
-- `npm run workflow:deploy -- staging|prod ...`
-- `npm run workflow:clean`
+- `npm run pipelane:setup`
+- `npm run pipelane:devmode -- ...`
+- `npm run pipelane:new -- --task "<task-name>"`
+- `npm run pipelane:resume -- --task "<task-name>"`
+- `npm run pipelane:pr -- ...`
+- `npm run pipelane:merge`
+- `npm run pipelane:release-check`
+- `npm run pipelane:task-lock -- verify --task "<task-name>"`
+- `npm run pipelane:deploy -- staging|prod ...`
+- `npm run pipelane:clean`
 
-## Use workflow-kit with gstack
+## Use pipelane with gstack
 
 You should use both.
 
-`workflow-kit` is not a replacement for gstack. It is the repo-specific workflow layer that works
+`pipelane` is not a replacement for gstack. It is the repo-specific workflow layer that works
 well alongside gstack.
 
 The boundary is:
 
-- `workflow-kit` owns repo-specific release discipline, task workspaces, and deterministic repo-native commands
+- `pipelane` owns repo-specific release discipline, task workspaces, and deterministic repo-native commands
 - gstack remains recommended for generic higher-level workflows like `review`, `qa`, `plan-eng-review`, `setup-deploy`, documentation, investigation, and standalone Codex workflows
 
-If a repo uses `workflow-kit`, prefer the workflow-kit release flow over generic gstack `/ship`.
-That is the key distinction. `/ship` is strong generic automation. `workflow-kit` is the
+If a repo uses `pipelane`, prefer the pipelane release flow over generic gstack `/ship`.
+That is the key distinction. `/ship` is strong generic automation. `pipelane` is the
 repo-specific release contract.
 
 The "best of both worlds" loop looks like this:
 
 1. use gstack to plan, review, test, or investigate
-2. use `workflow-kit` to start the task workspace with `/new`
-3. use `workflow-kit` to prep the PR, merge, and deploy
+2. use `pipelane` to start the task workspace with `/new`
+3. use `pipelane` to prep the PR, merge, and deploy
 4. go back to gstack for QA, docs, or follow-up review
 
 That pairing is the recommended setup.
@@ -283,16 +281,23 @@ That pairing is the recommended setup.
 Inside a target repo:
 
 ```bash
-npm install -D /Users/josephkim/dev/workflow-kit
-npx workflow-kit init --project "Next Project"
-npm run workflow:setup
+npx -y pipelane@github:jokim1/pipelane#main bootstrap --project "Next Project"
 ```
+
+If `pipelane` is already on your `PATH`, the equivalent is:
+
+```bash
+pipelane bootstrap --project "Next Project"
+```
+
+`bootstrap` installs the repo-local `pipelane` dependency if needed, runs `pipelane init`,
+and finishes with `pipelane setup`.
 
 That adds:
 
-- `.project-workflow.json`
+- `.pipelane.json`
 - `.claude/commands/*`
-- `workflow/CLAUDE.template.md`
+- `pipelane/CLAUDE.template.md`
 - `docs/RELEASE_WORKFLOW.md`
 - workflow sections in `README.md` and `CONTRIBUTING.md`
 - canonical `package.json` workflow scripts
@@ -303,33 +308,36 @@ There are two setup layers: repo-tracked setup and machine-local setup.
 
 ### One repo maintainer does this once
 
-1. `npm install -D workflow-kit`
-2. `npx workflow-kit init --project "Project Name"`
-3. Review `.project-workflow.json`, especially `aliases`, `prePrChecks`, and deploy defaults.
-4. Commit the tracked workflow files.
+1. Run `pipelane bootstrap --project "Project Name"` or the one-shot `npx -y pipelane@github:jokim1/pipelane#main bootstrap --project "Project Name"` form.
+2. Review `.pipelane.json`, especially `aliases`, `prePrChecks`, and deploy defaults.
+3. Commit the tracked Pipelane files.
 
 ### Every Claude user does this
 
-1. Pull the repo after the tracked workflow files are committed.
-2. Open the repo in Claude Code.
-3. If Claude was already open before the workflow files existed or the aliases changed, reopen the repo or restart the client.
+1. Optional once per machine: run `pipelane install-claude` to install the global `/init-pipelane` bootstrap command.
+2. Pull the repo after the tracked Pipelane files are committed.
+3. Open the repo in Claude Code.
+4. If Claude was already open before the workflow files existed or the aliases changed, reopen the repo or restart the client.
 
-Claude slash commands are repo-tracked through `.claude/commands/*`. Claude users do not need to install separate global wrappers.
+Claude slash commands are still repo-tracked through `.claude/commands/*`. `install-claude` only adds the global `/init-pipelane` bootstrap command for first adoption or repair.
 
 ### Every Codex user does this
 
-1. Pull the repo after the tracked workflow files are committed.
-2. Run `npm run workflow:setup` inside that repo.
-3. If Codex was already open, restart it or reopen the repo.
+1. Optional once per machine: run `pipelane install-codex` to install the global `/init-pipelane` bootstrap command.
+2. Pull the repo after the tracked Pipelane files are committed.
+3. Run `npm run pipelane:setup` inside that repo.
+4. If Codex was already open, restart it or reopen the repo.
 
 Codex wrappers are machine-global. Every Codex user must run setup locally on their own machine. If aliases change later, each Codex user must rerun setup.
 
+`/init-pipelane` is only for first adoption or repair in Claude or Codex. Day-to-day workflow commands stay repo-local (`/new`, `/pr`, `/merge`, `/deploy`, and so on).
+
 ### Any user who will deploy in release mode does this
 
-1. Run `npm run workflow:setup` if they have not already.
+1. Run `npm run pipelane:setup` if they have not already.
 2. Open local `CLAUDE.md`.
 3. Fill in the machine-readable deploy configuration for staging and production.
-4. Verify with `npm run workflow:release-check`.
+4. Verify with `npm run pipelane:release-check`.
 
 Without local deploy config, release mode stays fail-closed.
 
@@ -337,11 +345,11 @@ Without local deploy config, release mode stays fail-closed.
 
 Important for first adoption in an existing remote-backed repo:
 
-- run `workflow-kit init`
+- run `pipelane bootstrap` or `pipelane init`
 - review the tracked files
-- commit them before using `workflow:new`
+- commit them before using `pipelane:new`
 
-`workflow:new` creates new task worktrees from the repo's base branch. The tracked workflow
+`pipelane:new` creates new task worktrees from the repo's base branch. The tracked workflow
 contract needs to exist there first.
 
 ## Repo layout

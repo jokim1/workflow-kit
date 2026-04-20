@@ -1,4 +1,5 @@
 import type { ParsedOperatorArgs } from '../state.ts';
+import { buildBranchDetailsEnvelope, buildBranchPatchEnvelope } from '../api/branch.ts';
 import { buildWorkflowApiSnapshot } from '../api/snapshot.ts';
 import {
   STABLE_ACTION_IDS,
@@ -12,6 +13,26 @@ export async function handleApi(cwd: string, parsed: ParsedOperatorArgs): Promis
 
   if (!subcommand || subcommand === 'snapshot') {
     const envelope = buildWorkflowApiSnapshot(cwd);
+    process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
+    return;
+  }
+
+  if (subcommand === 'branch') {
+    if (!parsed.flags.branch) {
+      throw new Error('api branch requires --branch <branch-name>.');
+    }
+    if (parsed.flags.patch && !parsed.flags.file) {
+      throw new Error('api branch --patch requires --file <path>.');
+    }
+    if (parsed.flags.scope && parsed.flags.scope !== 'branch' && parsed.flags.scope !== 'workspace') {
+      throw new Error('api branch --scope must be "branch" or "workspace".');
+    }
+
+    const scope = parsed.flags.scope === 'workspace' ? 'workspace' : 'branch';
+    const envelope = parsed.flags.patch
+      ? buildBranchPatchEnvelope(cwd, parsed.flags.branch, parsed.flags.file, scope)
+      : buildBranchDetailsEnvelope(cwd, parsed.flags.branch);
+
     process.stdout.write(`${JSON.stringify(envelope, null, 2)}\n`);
     return;
   }
@@ -43,6 +64,6 @@ export async function handleApi(cwd: string, parsed: ParsedOperatorArgs): Promis
   }
 
   throw new Error(
-    `Unknown api subcommand "${subcommand}". Supported: snapshot, action.`,
+    `Unknown api subcommand "${subcommand}". Supported: snapshot, branch, action.`,
   );
 }
