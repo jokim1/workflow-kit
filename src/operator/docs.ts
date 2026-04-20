@@ -73,7 +73,7 @@ export const LEGACY_CLAUDE_SIGNATURES: Record<ManagedCommand, string[]> = {
   ],
   'repo-guard': [
     'Verify the current checkout is safe for a task, or create an isolated task worktree when it is not.',
-    'npm run workflow:repo-guard',
+    'npm run pipelane:repo-guard',
   ],
   status: [
     'Render a one-screen terminal cockpit of the pipelane:api snapshot.',

@@ -4,13 +4,14 @@ This repo uses `pipelane` for task workspaces, PR prep, merge handoff, and deplo
 
 ### Command surface
 
-- Default slash aliases are `{{ALIAS_DEVMODE}}`, `{{ALIAS_NEW}}`, `{{ALIAS_RESUME}}`, `{{ALIAS_PR}}`, `{{ALIAS_MERGE}}`, `{{ALIAS_DEPLOY}}`, `{{ALIAS_CLEAN}}`, `{{ALIAS_STATUS}}`, and `{{ALIAS_DOCTOR}}`.
+- Default slash aliases are `{{ALIAS_DEVMODE}}`, `{{ALIAS_NEW}}`, `{{ALIAS_RESUME}}`, `{{ALIAS_PR}}`, `{{ALIAS_MERGE}}`, `{{ALIAS_DEPLOY}}`, `{{ALIAS_CLEAN}}`, `{{ALIAS_STATUS}}`, `{{ALIAS_DOCTOR}}`, and `{{ALIAS_ROLLBACK}}`.
 - Use `npm run pipelane:new -- --task "<task-name>"` to start new work.
 - Use `npm run pipelane:resume -- --task "<task-name>"` to return to an existing task workspace.
 - Use `npm run pipelane:devmode -- status|build|release` to inspect or switch lanes.
 - Use `npm run pipelane:pr -- --title "<pr title>"` to prepare or update the PR.
 - Use `npm run pipelane:merge` to merge the PR and record the merged SHA.
 - Use `npm run pipelane:deploy -- staging|prod` to deploy the merged SHA.
+- Use `npm run pipelane:rollback -- staging|prod` to roll back the last deploy to the last-good SHA.
 - Use `npm run pipelane:clean` for workflow cleanup status.
 - Use `npm run pipelane:status` for the one-screen cockpit of task + lane state.
 - Use `npm run pipelane:doctor` to diagnose deploy config; `npm run pipelane:doctor -- --probe` to refresh staging healthcheck probes; `npm run pipelane:doctor -- --fix` for the guided wizard.

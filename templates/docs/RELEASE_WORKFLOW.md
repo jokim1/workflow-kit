@@ -51,6 +51,7 @@ This repo exposes the following user-facing slash commands through Claude/Codex 
 - `{{ALIAS_CLEAN}}`
 - `{{ALIAS_STATUS}}`
 - `{{ALIAS_DOCTOR}}`
+- `{{ALIAS_ROLLBACK}}`
 
 If aliases change in `.pipelane.json`, rerun `npm run pipelane:setup` and reopen Claude/Codex so the new command names are picked up.
 Aliases must be unique, and setup fails closed if an alias would overwrite an unrelated command or skill.
@@ -71,6 +72,7 @@ Use both.
 - `{{ALIAS_CLEAN}}`
 - `{{ALIAS_STATUS}}`
 - `{{ALIAS_DOCTOR}}`
+- `{{ALIAS_ROLLBACK}}`
 
 gstack is still recommended for:
 
