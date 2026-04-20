@@ -225,6 +225,11 @@ export async function dispatchDeploy(
   if (existingSucceeded && existingSucceeded.idempotencyKey === idempotencyKey) {
     return {
       ...existingSucceeded,
+      environment,
+      sha: target.sha,
+      surfaces,
+      workflowName,
+      taskSlug,
       message: [
         `Deploy already succeeded: ${environment}`,
         `Task: ${taskSlug}`,
@@ -297,6 +302,7 @@ export async function dispatchDeploy(
     setNextAction(context.commonDir, context.config, taskSlug, nextStage);
     return {
       ...record,
+      taskSlug,
       message: [
         `Deploy dispatched (async): ${environment}`,
         `Task: ${taskSlug}`,
@@ -403,6 +409,7 @@ export async function dispatchDeploy(
 
   return {
     ...record,
+    taskSlug,
     message: [
       `Deploy verified: ${environment}`,
       `Task: ${taskSlug}`,
