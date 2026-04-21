@@ -14,8 +14,8 @@ export interface BootstrapResult {
   installedPackage: boolean;
   initializedRepo: boolean;
   createdClaude: boolean;
-  codexHome: string;
-  installedWrappers: string[];
+  codexSkillsDir: string;
+  installedCodexSkills: string[];
   warnings: string[];
 }
 
@@ -64,15 +64,15 @@ function runLocalPipelane(repoRoot: string, args: string[]): string {
   return [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
 }
 
-function parseSetupOutput(stdout: string): { createdClaude: boolean; codexHome: string; installedWrappers: string[] } {
+function parseSetupOutput(stdout: string): { createdClaude: boolean; codexSkillsDir: string; installedCodexSkills: string[] } {
   const createdClaude = stdout.includes('Created local CLAUDE.md from the Pipelane template.');
-  const codexHome = stdout.match(/Installed Codex wrappers in (.+)/)?.[1]?.trim() ?? '';
+  const codexSkillsDir = stdout.match(/Synced Codex skills in (.+)/)?.[1]?.trim() ?? '';
   const wrapperCsv = stdout.match(/Slash commands: (.+)/)?.[1]?.trim() ?? '';
-  const installedWrappers = wrapperCsv
+  const installedCodexSkills = wrapperCsv
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean);
-  return { createdClaude, codexHome, installedWrappers };
+  return { createdClaude, codexSkillsDir, installedCodexSkills };
 }
 
 function readDisplayName(repoRoot: string): string {
@@ -178,8 +178,8 @@ export function runBootstrap(cwd: string, options: BootstrapOptions): BootstrapR
     installedPackage,
     initializedRepo,
     createdClaude: parsedSetup.createdClaude,
-    codexHome: parsedSetup.codexHome,
-    installedWrappers: parsedSetup.installedWrappers,
+    codexSkillsDir: parsedSetup.codexSkillsDir,
+    installedCodexSkills: parsedSetup.installedCodexSkills,
     warnings: collectBootstrapWarnings(repoRoot),
   };
 }

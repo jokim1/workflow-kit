@@ -56,6 +56,49 @@ function createRepo() {
   return repoRoot;
 }
 
+function seedLegacyCodexWrappers(codexHome, skills = ['new', 'resume', 'pr']) {
+  mkdirSync(path.join(codexHome, 'skills', '.pipelane'), { recursive: true });
+  writeFileSync(
+    path.join(codexHome, 'skills', '.pipelane', 'managed-skills.json'),
+    `${JSON.stringify({ skills }, null, 2)}\n`,
+    'utf8',
+  );
+
+  for (const skill of skills) {
+    mkdirSync(path.join(codexHome, 'skills', skill), { recursive: true });
+    writeFileSync(
+      path.join(codexHome, 'skills', skill, 'SKILL.md'),
+      `Run the generic pipelane wrapper for this repo.\n~/.codex/skills/.pipelane/bin/run-pipelane.sh ${skill}\n`,
+      'utf8',
+    );
+  }
+}
+
+function seedLegacyCodexBootstrapSkill(codexHome) {
+  mkdirSync(path.join(codexHome, 'skills', 'init-pipelane'), { recursive: true });
+  writeFileSync(
+    path.join(codexHome, 'skills', 'init-pipelane', 'SKILL.md'),
+    `---
+name: init-pipelane
+version: 1.0.0
+description: Bootstrap the current repo with pipelane.
+allowed-tools:
+  - Bash
+---
+
+Run the generic pipelane wrapper for this repo.
+
+1. Parse any arguments that appear after \`/init-pipelane\` in the user's message.
+2. Preserve quoted substrings when building the shell command.
+3. Run:
+   \`${codexHome}/skills/.pipelane/bin/bootstrap-pipelane.sh <parsed arguments>\`
+4. Stream the command output directly.
+5. If setup changed the slash command inventory, tell the user to reopen Codex if needed.
+`,
+    'utf8',
+  );
+}
+
 function createRemoteBackedRepo() {
   const repoRoot = createRepo();
   const remoteRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-remote-'));
@@ -633,7 +676,7 @@ function makeDashboardFixture() {
   };
 }
 
-test('init writes tracked Pipelane files and setup seeds CLAUDE plus Codex wrappers', () => {
+test('init writes tracked Pipelane files and setup seeds CLAUDE plus tracked Codex skills while pruning legacy wrappers', () => {
   const repoRoot = createRepo();
   const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
@@ -642,13 +685,20 @@ test('init writes tracked Pipelane files and setup seeds CLAUDE plus Codex wrapp
     assert.match(initResult.stdout, /Initialized pipelane/);
     assert.ok(existsSync(path.join(repoRoot, '.pipelane.json')));
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'new.md')));
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'new', 'SKILL.md')));
     assert.ok(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')));
+
+    seedLegacyCodexWrappers(codexHome);
 
     const setupResult = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
     assert.match(setupResult.stdout, /[Pp]ipelane setup complete/);
-    assert.match(setupResult.stdout, /Each Codex user must run npm run pipelane:setup/);
+    assert.match(setupResult.stdout, /Synced Codex skills in/);
+    assert.match(setupResult.stdout, /Removed legacy machine-local wrapper skills: new, pr, resume/);
     assert.ok(existsSync(path.join(repoRoot, 'CLAUDE.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'new', 'SKILL.md')));
+    assert.equal(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')), false);
+    assert.equal(existsSync(path.join(codexHome, 'skills', 'resume', 'SKILL.md')), false);
+    assert.equal(existsSync(path.join(codexHome, 'skills', 'pr', 'SKILL.md')), false);
 
     const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     // Canonical pipelane:* script names
@@ -679,15 +729,16 @@ test('bootstrap installs pipelane, initializes the repo, and seeds the global bo
     assert.match(result.stdout, /Bootstrapped pipelane/);
     assert.match(result.stdout, /Installed repo-local pipelane dependency/);
     assert.match(result.stdout, /Initialized tracked Pipelane files for Demo App/);
-    assert.match(result.stdout, /Slash commands: .*\/init-pipelane.*\/new/);
+    assert.match(result.stdout, /Synced Codex skills in/);
+    assert.match(result.stdout, /Slash commands: .*\/new/);
     assert.match(result.stdout, /Readiness warnings:/);
     assert.match(result.stdout, /This repo has no commits yet/);
     assert.match(result.stdout, /No `origin` remote detected/);
     assert.ok(existsSync(path.join(repoRoot, '.pipelane.json')));
     assert.ok(existsSync(path.join(repoRoot, 'CLAUDE.md')));
     assert.ok(existsSync(path.join(repoRoot, 'node_modules', 'pipelane', 'package.json')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'init-pipelane', 'SKILL.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'new', 'SKILL.md')));
+    assert.equal(existsSync(path.join(codexHome, 'skills', 'init-pipelane', 'SKILL.md')), false);
 
     const packageJson = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
     assert.equal(typeof packageJson.devDependencies.pipelane, 'string');
@@ -782,7 +833,7 @@ test('install-claude fails closed when init-pipelane already exists as an unrela
   }
 });
 
-test('custom aliases drive generated Claude commands, docs, and Codex wrappers', () => {
+test('custom aliases drive generated Claude commands, docs, and tracked Codex skills', () => {
   const repoRoot = createRepo();
   const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
@@ -791,7 +842,7 @@ test('custom aliases drive generated Claude commands, docs, and Codex wrappers',
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
 
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'new.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'new', 'SKILL.md')));
 
     const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -823,15 +874,15 @@ test('custom aliases drive generated Claude commands, docs, and Codex wrappers',
     assert.match(readme, /pipelane install-codex/);
     assert.match(workflowDoc, /\/branch/);
     assert.match(workflowDoc, /pipelane install-claude/);
-    assert.match(workflowDoc, /Codex wrappers are machine-global/);
+    assert.match(workflowDoc, /\.agents\/skills/);
 
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'back', 'SKILL.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'draft-pr', 'SKILL.md')));
-    assert.equal(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')), false);
-    assert.equal(existsSync(path.join(codexHome, 'skills', 'resume', 'SKILL.md')), false);
-    assert.equal(existsSync(path.join(codexHome, 'skills', 'pr', 'SKILL.md')), false);
-    assert.match(readFileSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md'), 'utf8'), /run-pipelane\.sh --alias \/branch/);
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'branch', 'SKILL.md')));
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'back', 'SKILL.md')));
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'draft-pr', 'SKILL.md')));
+    assert.equal(existsSync(path.join(repoRoot, '.agents', 'skills', 'new', 'SKILL.md')), false);
+    assert.equal(existsSync(path.join(repoRoot, '.agents', 'skills', 'resume', 'SKILL.md')), false);
+    assert.equal(existsSync(path.join(repoRoot, '.agents', 'skills', 'pr', 'SKILL.md')), false);
+    assert.match(readFileSync(path.join(repoRoot, '.agents', 'skills', 'branch', 'SKILL.md'), 'utf8'), /npm run pipelane:new --/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -868,8 +919,8 @@ test('setup fails closed when an alias would overwrite an unrelated Codex skill'
 
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
-    mkdirSync(path.join(codexHome, 'skills', 'branch'), { recursive: true });
-    writeFileSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md'), 'custom branch skill\n', 'utf8');
+    mkdirSync(path.join(repoRoot, '.agents', 'skills', 'branch'), { recursive: true });
+    writeFileSync(path.join(repoRoot, '.agents', 'skills', 'branch', 'SKILL.md'), 'custom branch skill\n', 'utf8');
 
     const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -879,14 +930,14 @@ test('setup fails closed when an alias would overwrite an unrelated Codex skill'
     const result = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome }, true);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /Codex skill alias collision/);
-    assert.equal(readFileSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md'), 'utf8'), 'custom branch skill\n');
+    assert.equal(readFileSync(path.join(repoRoot, '.agents', 'skills', 'branch', 'SKILL.md'), 'utf8'), 'custom branch skill\n');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
   }
 });
 
-test('managed Claude commands and Codex skills are pruned on alias rename', () => {
+test('managed Claude commands and tracked Codex skills are pruned on alias rename', () => {
   const repoRoot = createRepo();
   const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
@@ -942,15 +993,6 @@ test('managed Claude commands and Codex skills are pruned on alias rename', () =
       'utf8',
     );
 
-    for (const skill of ['new', 'resume', 'pr']) {
-      mkdirSync(path.join(codexHome, 'skills', skill), { recursive: true });
-      writeFileSync(
-        path.join(codexHome, 'skills', skill, 'SKILL.md'),
-        `Run the generic pipelane wrapper for this repo.\n~/.codex/skills/.pipelane/bin/run-pipelane.sh ${skill}\n`,
-        'utf8',
-      );
-    }
-
     const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.aliases.new = '/branch';
@@ -967,12 +1009,12 @@ test('managed Claude commands and Codex skills are pruned on alias rename', () =
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'back.md')));
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'draft-pr.md')));
 
-    assert.equal(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')), false);
-    assert.equal(existsSync(path.join(codexHome, 'skills', 'resume', 'SKILL.md')), false);
-    assert.equal(existsSync(path.join(codexHome, 'skills', 'pr', 'SKILL.md')), false);
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'back', 'SKILL.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'draft-pr', 'SKILL.md')));
+    assert.equal(existsSync(path.join(repoRoot, '.agents', 'skills', 'new', 'SKILL.md')), false);
+    assert.equal(existsSync(path.join(repoRoot, '.agents', 'skills', 'resume', 'SKILL.md')), false);
+    assert.equal(existsSync(path.join(repoRoot, '.agents', 'skills', 'pr', 'SKILL.md')), false);
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'branch', 'SKILL.md')));
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'back', 'SKILL.md')));
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'draft-pr', 'SKILL.md')));
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -1830,7 +1872,7 @@ test('syncDocs.packageScripts: false without required pipelane:* scripts throws 
     // Error message must list the three escape hatches so the consumer
     // can recover without digging into the codebase.
     assert.match(result.stderr, /set syncDocs\.packageScripts to true/);
-    assert.match(result.stderr, /set syncDocs\.claudeCommands to false/);
+    assert.match(result.stderr, /set syncDocs\.claudeCommands and syncDocs\.codexSkills to false/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
@@ -1852,7 +1894,7 @@ test('syncDocs.packageScripts: false is allowed when claudeCommands is also fals
 
     const configPath = path.join(repoRoot, '.pipelane.json');
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
-    config.syncDocs = { packageScripts: false, claudeCommands: false };
+    config.syncDocs = { packageScripts: false, claudeCommands: false, codexSkills: false };
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
@@ -1911,6 +1953,7 @@ test('syncDocs resolver coerces non-boolean junk back to defaults', () => {
 
     // Wipe every surface init pre-wrote so the assertions observe the
     // opt-out pass's actual behavior instead of left-over init state.
+    rmSync(path.join(repoRoot, '.agents'), { recursive: true, force: true });
     rmSync(path.join(repoRoot, 'docs'), { recursive: true, force: true });
     rmSync(path.join(repoRoot, 'workflow'), { recursive: true, force: true });
     writeFileSync(path.join(repoRoot, 'README.md'), '# Consumer README\n', 'utf8');
@@ -1924,6 +1967,7 @@ test('syncDocs resolver coerces non-boolean junk back to defaults', () => {
     // docsReleaseWorkflow: false is a real boolean → honored → no file.
     assert.equal(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')), false);
     // Junk values fall back to default true → surface DID sync.
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'clean', 'SKILL.md')));
     assert.match(readFileSync(path.join(repoRoot, 'README.md'), 'utf8'), /pipelane:readme:start/);
     assert.match(readFileSync(path.join(repoRoot, 'CONTRIBUTING.md'), 'utf8'), /pipelane:contributing:start/);
     assert.match(readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8'), /pipelane:agents:start/);
@@ -1954,6 +1998,7 @@ test('syncDocs as a non-object (string) resolves to all defaults without crashin
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
 
     // Every surface still syncs (all defaults remain true).
+    assert.ok(existsSync(path.join(repoRoot, '.agents', 'skills', 'clean', 'SKILL.md')));
     assert.ok(existsSync(path.join(repoRoot, '.claude', 'commands', 'clean.md')));
     assert.ok(existsSync(path.join(repoRoot, 'docs', 'RELEASE_WORKFLOW.md')));
     assert.match(readFileSync(path.join(repoRoot, 'README.md'), 'utf8'), /pipelane:readme:start/);
@@ -2028,7 +2073,7 @@ test('claudeCommands: false preserves consumer-extension content without pruning
   }
 });
 
-test('all seven flags: false produces zero writes from a wiped repo', () => {
+test('all eight flags: false produces zero writes from a wiped repo', () => {
   const repoRoot = createRepo();
   const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
@@ -2039,6 +2084,7 @@ test('all seven flags: false produces zero writes from a wiped repo', () => {
     const config = JSON.parse(readFileSync(configPath, 'utf8'));
     config.syncDocs = {
       claudeCommands: false,
+      codexSkills: false,
       readmeSection: false,
       contributingSection: false,
       agentsSection: false,
@@ -2049,6 +2095,7 @@ test('all seven flags: false produces zero writes from a wiped repo', () => {
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
 
     // Wipe everything init wrote so opt-out behavior is observable.
+    rmSync(path.join(repoRoot, '.agents'), { recursive: true, force: true });
     rmSync(path.join(repoRoot, '.claude'), { recursive: true, force: true });
     rmSync(path.join(repoRoot, 'docs'), { recursive: true, force: true });
     rmSync(path.join(repoRoot, 'workflow'), { recursive: true, force: true });
@@ -2060,6 +2107,7 @@ test('all seven flags: false produces zero writes from a wiped repo', () => {
 
     runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
 
+    assert.equal(existsSync(path.join(repoRoot, '.agents')), false);
     assert.equal(existsSync(path.join(repoRoot, '.claude')), false);
     assert.equal(existsSync(path.join(repoRoot, 'docs')), false);
     assert.equal(existsSync(path.join(repoRoot, 'workflow')), false);
@@ -2074,7 +2122,34 @@ test('all seven flags: false produces zero writes from a wiped repo', () => {
   }
 });
 
-test('Codex alias wrappers stay safe when different repos map the same alias differently', () => {
+test('syncDocs.codexSkills: false preserves legacy machine-local Codex wrappers', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    const configPath = path.join(repoRoot, '.pipelane.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.syncDocs = { codexSkills: false };
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    rmSync(path.join(repoRoot, '.agents'), { recursive: true, force: true });
+    seedLegacyCodexWrappers(codexHome, ['new', 'resume']);
+
+    const result = runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+    assert.match(result.stdout, /Skipped tracked Codex skill sync because syncDocs\.codexSkills is false\./);
+    assert.doesNotMatch(result.stdout, /Removed legacy machine-local wrapper skills/);
+    assert.ok(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')));
+    assert.ok(existsSync(path.join(codexHome, 'skills', 'resume', 'SKILL.md')));
+    assert.equal(existsSync(path.join(repoRoot, '.agents', 'skills')), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('tracked Codex skills stay repo-local when different repos map the same alias differently', () => {
   const repoOne = createRepo();
   const repoTwo = createRepo();
   const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
@@ -2097,11 +2172,12 @@ test('Codex alias wrappers stay safe when different repos map the same alias dif
     runCli(['setup'], repoOne, { CODEX_HOME: codexHome });
     runCli(['setup'], repoTwo, { CODEX_HOME: codexHome });
 
-    const branchSkill = readFileSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md'), 'utf8');
-    assert.match(branchSkill, /run-pipelane\.sh --alias \/branch/);
-    assert.doesNotMatch(branchSkill, /run-pipelane\.sh new/);
-    assert.doesNotMatch(branchSkill, /run-pipelane\.sh resume/);
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'back', 'SKILL.md')));
+    const repoOneBranchSkill = readFileSync(path.join(repoOne, '.agents', 'skills', 'branch', 'SKILL.md'), 'utf8');
+    const repoTwoBranchSkill = readFileSync(path.join(repoTwo, '.agents', 'skills', 'branch', 'SKILL.md'), 'utf8');
+    assert.match(repoOneBranchSkill, /npm run pipelane:new --/);
+    assert.match(repoTwoBranchSkill, /npm run pipelane:resume --/);
+    assert.ok(existsSync(path.join(repoOne, '.agents', 'skills', 'back', 'SKILL.md')));
+    assert.equal(existsSync(path.join(repoTwo, '.agents', 'skills', 'back', 'SKILL.md')), false);
   } finally {
     rmSync(repoOne, { recursive: true, force: true });
     rmSync(repoTwo, { recursive: true, force: true });
@@ -2109,50 +2185,44 @@ test('Codex alias wrappers stay safe when different repos map the same alias dif
   }
 });
 
-test('setup migrates legacy managed-skills.json without preserving stale aliases', () => {
-  const repoRoot = createRepo();
+test('install-codex prunes legacy machine-local wrapper skills while keeping init-pipelane', () => {
+  const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-install-codex-'));
   const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
 
   try {
-    runCli(['init', '--project', 'Demo App'], repoRoot);
+    seedLegacyCodexWrappers(codexHome);
 
-    mkdirSync(path.join(codexHome, 'skills', '.pipelane'), { recursive: true });
-    writeFileSync(
-      path.join(codexHome, 'skills', '.pipelane', 'managed-skills.json'),
-      `${JSON.stringify({ skills: ['new', 'resume', 'pr'] }, null, 2)}\n`,
-      'utf8',
-    );
-
-    for (const skill of ['new', 'resume', 'pr']) {
-      mkdirSync(path.join(codexHome, 'skills', skill), { recursive: true });
-      writeFileSync(
-        path.join(codexHome, 'skills', skill, 'SKILL.md'),
-        `Run the generic pipelane wrapper for this repo.\n~/.codex/skills/.pipelane/bin/run-pipelane.sh ${skill}\n`,
-        'utf8',
-      );
-    }
-
-    const configPath = path.join(repoRoot, '.pipelane.json');
-    const config = JSON.parse(readFileSync(configPath, 'utf8'));
-    config.aliases.new = '/branch';
-    config.aliases.resume = '/back';
-    config.aliases.pr = '/draft-pr';
-    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-
-    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+    const result = runCli(['install-codex'], workspaceRoot, { CODEX_HOME: codexHome });
+    assert.match(result.stdout, /Removed legacy machine-local wrapper skills: new, pr, resume/);
 
     assert.equal(existsSync(path.join(codexHome, 'skills', 'new', 'SKILL.md')), false);
     assert.equal(existsSync(path.join(codexHome, 'skills', 'resume', 'SKILL.md')), false);
     assert.equal(existsSync(path.join(codexHome, 'skills', 'pr', 'SKILL.md')), false);
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'branch', 'SKILL.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'back', 'SKILL.md')));
-    assert.ok(existsSync(path.join(codexHome, 'skills', 'draft-pr', 'SKILL.md')));
-
-    const manifest = JSON.parse(readFileSync(path.join(codexHome, 'skills', '.pipelane', 'managed-skills.json'), 'utf8'));
-    assert.equal(manifest.version, 2);
-    assert.deepEqual(Object.keys(manifest.repos), [realpathSync(repoRoot)]);
+    assert.ok(existsSync(path.join(codexHome, 'skills', 'init-pipelane', 'SKILL.md')));
+    assert.equal(existsSync(path.join(codexHome, 'skills', '.pipelane', 'managed-skills.json')), false);
+    assert.equal(existsSync(path.join(codexHome, 'skills', '.pipelane', 'bin', 'run-pipelane.sh')), false);
   } finally {
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(workspaceRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('install-codex upgrades a legacy managed init-pipelane skill in place', () => {
+  const workspaceRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-install-codex-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+
+  try {
+    seedLegacyCodexBootstrapSkill(codexHome);
+
+    const result = runCli(['install-codex'], workspaceRoot, { CODEX_HOME: codexHome });
+    assert.match(result.stdout, /\/init-pipelane/);
+
+    const skillPath = path.join(codexHome, 'skills', 'init-pipelane', 'SKILL.md');
+    const skill = readFileSync(skillPath, 'utf8');
+    assert.match(skill, /pipelane:codex-bootstrap:init-pipelane/);
+    assert.match(skill, /Run the global pipelane bootstrap for this machine\./);
+  } finally {
+    rmSync(workspaceRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
   }
 });

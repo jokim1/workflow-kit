@@ -21,7 +21,8 @@ import {
   writeWorkflowConfig,
 } from './state.ts';
 import { emptyDeployConfig, renderDeployConfigSection } from './release-gate.ts';
-import { installCodexWrappers } from './codex-install.ts';
+import { pruneLegacyCodexWrapperSkills } from './codex-install.ts';
+import { syncCodexSkills } from './codex-skills.ts';
 
 const README_MARKER_START = '<!-- pipelane:readme:start -->';
 const README_MARKER_END = '<!-- pipelane:readme:end -->';
@@ -377,12 +378,12 @@ export function ensurePackageScripts(repoRoot: string): void {
   writeFileSync(targetPath, `${JSON.stringify(next, null, 2)}\n`, 'utf8');
 }
 
-// Generated slash-command templates and Codex wrappers invoke
+// Generated slash-command templates and tracked Codex skills invoke
 // `npm run pipelane:<cmd>`. If a consumer opts out of packageScripts but
-// keeps claudeCommands, the generated command files would point at scripts
-// that do not exist. Catch that mismatch here instead of leaving a broken setup.
+// keeps either surface, the generated files would point at scripts that do
+// not exist. Catch that mismatch here instead of leaving a broken setup.
 function assertPackageScriptConsistency(repoRoot: string, syncDocs: Required<SyncDocsConfig>): void {
-  if (syncDocs.packageScripts || !syncDocs.claudeCommands) {
+  if (syncDocs.packageScripts || (!syncDocs.claudeCommands && !syncDocs.codexSkills)) {
     return;
   }
 
@@ -401,11 +402,11 @@ function assertPackageScriptConsistency(repoRoot: string, syncDocs: Required<Syn
 
   throw new Error(
     `syncDocs.packageScripts is false but package.json is missing required npm scripts: ${missing.join(', ')}. ` +
-      `The generated .claude/commands/*.md templates and Codex wrappers invoke these via \`npm run pipelane:<cmd>\`. ` +
+      `The generated .claude/commands/*.md templates and tracked Codex skills invoke these via \`npm run pipelane:<cmd>\`. ` +
       `Fix it one of three ways: ` +
       `(a) add the missing scripts to package.json yourself, ` +
       `(b) set syncDocs.packageScripts to true (or drop the flag), or ` +
-      `(c) also set syncDocs.claudeCommands to false so the command files aren't generated.`,
+      `(c) also set syncDocs.claudeCommands and syncDocs.codexSkills to false so the command files aren't generated.`,
   );
 }
 
@@ -463,6 +464,10 @@ export function syncConsumerDocs(repoRoot: string, config: WorkflowConfig): void
       writeFileSync(targetPath, output, 'utf8');
     }
     saveManagedClaudeCommands(commandsDir, desiredCommandFiles);
+  }
+
+  if (syncDocs.codexSkills) {
+    syncCodexSkills(repoRoot, config);
   }
 
   if (syncDocs.pipelaneClaudeTemplate) {
@@ -536,8 +541,9 @@ export function initConsumerRepo(cwd: string, projectName: string): { repoRoot: 
 export function setupConsumerRepo(cwd: string): {
   repoRoot: string;
   createdClaude: boolean;
-  codexHome: string;
-  installedWrappers: string[];
+  codexSkillsDir: string;
+  installedCodexSkills: string[];
+  removedLegacyCodexSkills: string[];
 } {
   const repoRoot = resolveRepoRoot(cwd, true);
   const configPath = path.join(repoRoot, CONFIG_FILENAME);
@@ -551,6 +557,7 @@ export function setupConsumerRepo(cwd: string): {
     ...parsed,
     aliases: resolveWorkflowAliases(parsed.aliases),
   };
+  const syncDocs = resolveSyncDocs(config.syncDocs);
   syncConsumerDocs(repoRoot, config);
 
   const claudePath = path.join(repoRoot, 'CLAUDE.md');
@@ -560,13 +567,18 @@ export function setupConsumerRepo(cwd: string): {
     createdClaude = true;
   }
 
-  const codex = installCodexWrappers({ repoRoot, aliases: config.aliases });
+  const removedLegacyCodexSkills = syncDocs.codexSkills
+    ? pruneLegacyCodexWrapperSkills()
+    : [];
 
   return {
     repoRoot,
     createdClaude,
-    codexHome: codex.codexHome,
-    installedWrappers: codex.installed,
+    codexSkillsDir: path.join(repoRoot, '.agents', 'skills'),
+    installedCodexSkills: syncDocs.codexSkills
+      ? WORKFLOW_COMMANDS.map((command) => config.aliases[command])
+      : [],
+    removedLegacyCodexSkills,
   };
 }
 

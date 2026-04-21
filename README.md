@@ -42,7 +42,7 @@ npm run pipelane:deploy -- prod
 npm run pipelane:clean
 ```
 
-Claude and Codex wrappers exist to make those commands easier to invoke, not to replace them.
+Claude command files and Codex skills exist to make those commands easier to invoke, not to replace them.
 
 ## Why It Lives Outside Product Repos
 
@@ -62,13 +62,13 @@ Bootstrapping Pipelane into a repo adds or manages:
 
 - `.pipelane.json` for tracked workflow config
 - `.claude/commands/*` for repo-tracked Claude commands
+- `.agents/skills/*` for repo-tracked Codex skills
 - `pipelane/CLAUDE.template.md` for machine-local operator config
 - `docs/RELEASE_WORKFLOW.md` for the repo's operator guide
 - a Pipelane section in `README.md`
 - a Pipelane section in `CONTRIBUTING.md`
 - canonical `npm run pipelane:*` scripts in `package.json`
 - machine-local `CLAUDE.md` when the local operator runs setup
-- machine-local Codex wrappers under the user's `CODEX_HOME`
 
 ## The Pipelane Website / Board
 
@@ -162,7 +162,7 @@ Why:
 ### Optional environment integrations
 
 - Claude Code if you want repo-tracked `.claude/commands/*`
-- Codex if you want machine-local slash wrappers
+- Codex if you want repo-tracked Codex skills
 
 ### Release-mode-only requirements
 
@@ -228,7 +228,7 @@ What `bootstrap` does:
 2. runs `pipelane init`
 3. runs `pipelane setup`
 4. creates local `CLAUDE.md` if it does not exist yet
-5. installs Codex wrappers on the current machine
+5. writes tracked Codex skills under `.agents/skills/*`
 6. prints readiness warnings if the repo is not actually ready for `/new`
 
 ### Step 3: Review What Bootstrap Added
@@ -237,6 +237,7 @@ After bootstrap, you should expect to see:
 
 - `.pipelane.json`
 - `.claude/commands/*`
+- `.agents/skills/*`
 - `pipelane/CLAUDE.template.md`
 - `docs/RELEASE_WORKFLOW.md`
 - Pipelane sections in `README.md` and `CONTRIBUTING.md`
@@ -248,7 +249,7 @@ After bootstrap, you should expect to see:
 Do this before using `/new` in a normal remote-backed repo:
 
 ```bash
-git add .pipelane.json .claude/commands README.md CONTRIBUTING.md docs/RELEASE_WORKFLOW.md pipelane/CLAUDE.template.md package.json package-lock.json
+git add .pipelane.json .claude/commands .agents/skills README.md CONTRIBUTING.md docs/RELEASE_WORKFLOW.md pipelane/CLAUDE.template.md package.json package-lock.json
 git commit -m "Add pipelane workflow"
 git push
 ```
@@ -271,14 +272,9 @@ Why this matters:
 
 1. pull the repo after the tracked files are committed
 2. optionally run `pipelane install-codex` once per machine if they want the global `/init-pipelane` bootstrap command
-3. run `npm run pipelane:setup` inside the repo on that machine
-4. reopen Codex if it was already open
-
-Why Codex needs a local step:
-
-- Codex wrappers are machine-global
-- every Codex user must install or refresh them locally
-- if aliases change later, each Codex user must rerun setup
+3. if this machine previously used pipelane's machine-local Codex wrappers, run `npm run pipelane:setup` once to prune them
+4. open the repo in Codex
+5. reopen Codex if it was already open before the repo gained tracked skills or aliases changed
 
 ## Detailed User Journey: Build Mode
 
@@ -584,7 +580,7 @@ Those names come from `.pipelane.json` under `aliases`.
 If you change aliases:
 
 - rerun `npm run pipelane:setup`
-- every Codex user must rerun setup on their own machine
+- commit the regenerated `.claude/commands/*` and `.agents/skills/*`
 - reopen Claude or Codex if it was already open
 - keep aliases unique
 

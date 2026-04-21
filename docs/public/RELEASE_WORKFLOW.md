@@ -500,7 +500,7 @@ in `AGENTS.md` where enforcement is social.
 | --- | --- | --- |
 | `pipelane bootstrap --project "<name>"` | Install pipelane into the repo, scaffold tracked files, and run setup | shipped |
 | `npx pipelane init --project "<name>"` | Scaffold tracked files in a repo that already has pipelane installed locally | rename-pending |
-| `npm run pipelane:setup` | Install aliases, templates, Claude commands | rename-pending |
+| `npm run pipelane:setup` | Install templates, Claude commands, and tracked Codex skills | rename-pending |
 | `pipelane install-claude` | Install the global Claude `/init-pipelane` bootstrap command on this machine | shipped |
 | `pipelane install-codex` | Install the global Codex `/init-pipelane` bootstrap command on this machine | shipped |
 
@@ -511,6 +511,7 @@ in `AGENTS.md` where enforcement is social.
 - `.pipelane.json` — baseBranch, surfaces, aliases, prePrChecks, deploy workflow names
 - `AGENTS.md` — policy for AI operators
 - `.claude/commands/*` — thin slash adapters
+- `.agents/skills/*` — tracked Codex skills
 - `pipelane/CLAUDE.template.md` — template used to bootstrap local operator state
 - `docs/RELEASE_WORKFLOW.md` — rendered from the pipelane template; pipelane's own copy of this reference lives at `docs/public/RELEASE_WORKFLOW.md`
 

@@ -108,7 +108,7 @@ before using `pipelane:new` in a remote-backed repo.
 
 - One repo maintainer runs `pipelane bootstrap --project "<name>"`, reviews `.pipelane.json`, and commits the tracked Pipelane files.
 - Each Claude user can run `pipelane install-claude` once per machine for the global `/init-pipelane` bootstrap command, then pulls the repo and reopens Claude if command files or aliases changed.
-- Each Codex user can run `pipelane install-codex` once per machine for the global `/init-pipelane` bootstrap command, then runs `npm run pipelane:setup` in this repo and reopens Codex if needed.
+- Each Codex user can optionally run `pipelane install-codex` once per machine for the global `/init-pipelane` bootstrap command, then pulls the repo. If that machine previously used pipelane's machine-local Codex wrappers, rerun `npm run pipelane:setup` once to prune them before reopening Codex.
 - Each release operator fills local deploy config in `CLAUDE.md` and verifies with `npm run pipelane:release-check`.
 
 Use [docs/RELEASE_WORKFLOW.md](./docs/RELEASE_WORKFLOW.md) for the full operator workflow.

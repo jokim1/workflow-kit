@@ -90,6 +90,7 @@ export interface WorkflowConfig {
 // skipped to false.
 export interface SyncDocsConfig {
   claudeCommands?: boolean;
+  codexSkills?: boolean;
   readmeSection?: boolean;
   contributingSection?: boolean;
   agentsSection?: boolean;
@@ -100,6 +101,7 @@ export interface SyncDocsConfig {
 
 export const DEFAULT_SYNC_DOCS: Required<SyncDocsConfig> = {
   claudeCommands: true,
+  codexSkills: true,
   readmeSection: true,
   contributingSection: true,
   agentsSection: true,
@@ -538,6 +540,7 @@ function normalizeSyncDocsConfig(raw: SyncDocsConfig | undefined): SyncDocsConfi
   if (!raw || typeof raw !== 'object') return undefined;
   const keys: (keyof SyncDocsConfig)[] = [
     'claudeCommands',
+    'codexSkills',
     'readmeSection',
     'contributingSection',
     'agentsSection',

@@ -240,6 +240,7 @@ Tracked:
 - `.pipelane.json`
 - `AGENTS.md`
 - `.claude/commands/*`
+- `.agents/skills/*`
 - `pipelane/CLAUDE.template.md`
 - `docs/RELEASE_WORKFLOW.md`
 
@@ -254,7 +255,7 @@ This repo tracks `.pipelane.json` as the workflow contract.
 ### Optional `syncDocs` opt-outs
 
 By default, `pipelane setup` and `pipelane sync-docs` write every surface:
-regenerate `.claude/commands/*.md`, inject marker sections into
+regenerate `.claude/commands/*.md` and `.agents/skills/*`, inject marker sections into
 `README.md` / `CONTRIBUTING.md` / `AGENTS.md`, create or refresh
 `docs/RELEASE_WORKFLOW.md` and `pipelane/CLAUDE.template.md`, and ensure
 the `pipelane:*` scripts in `package.json`.
@@ -267,6 +268,7 @@ adding a `syncDocs` block. Every flag defaults to `true`; absent or
 {
   "syncDocs": {
     "claudeCommands": true,
+    "codexSkills": true,
     "readmeSection": false,
     "contributingSection": false,
     "agentsSection": false,
@@ -280,12 +282,13 @@ adding a `syncDocs` block. Every flag defaults to `true`; absent or
 | Flag | Controls |
 | --- | --- |
 | `claudeCommands` | `.claude/commands/*.md` regeneration, including `pipelane.md` and the managed manifest. |
+| `codexSkills` | `.agents/skills/*` regeneration, including the managed manifest for tracked Codex skills. |
 | `readmeSection` | Marker-wrapped `README.md` section. |
 | `contributingSection` | Marker-wrapped `CONTRIBUTING.md` section. |
 | `agentsSection` | Marker-wrapped `AGENTS.md` section. |
 | `docsReleaseWorkflow` | `docs/RELEASE_WORKFLOW.md` file write. |
 | `pipelaneClaudeTemplate` | `pipelane/CLAUDE.template.md` file write. |
-| `packageScripts` | `pipelane:*` + `pipelane:*` script entries in `package.json`. Setting this to `false` while `claudeCommands` is `true` requires the consumer's `package.json` to already define every `pipelane:<cmd>` script (`new`, `resume`, `pr`, `merge`, `deploy`, `clean`, `devmode`). Setup fails fast with guidance if any are missing. |
+| `packageScripts` | `pipelane:*` script entries in `package.json`. Setting this to `false` while `claudeCommands` or `codexSkills` is `true` requires the consumer's `package.json` to already define every tracked workflow script (`devmode`, `new`, `resume`, `repo-guard`, `pr`, `merge`, `deploy`, `clean`, `status`, `doctor`, `rollback`) plus `pipelane:configure`. Setup fails fast with guidance if any are missing. |
 
 Opting out never removes content that a previous sync already wrote; it
 just stops future syncs from touching the surface.
@@ -317,10 +320,9 @@ This repo tracks `AGENTS.md` as the repo policy surface for pipelane.
 
 1. optional once per machine: run `pipelane install-codex` for the global `/init-pipelane` bootstrap command
 2. pull the committed workflow files
-3. run `npm run pipelane:setup`
-4. reopen or restart Codex if the new command names do not appear immediately
-
-Codex wrappers are machine-global, so every Codex user must run setup on their own machine. If aliases change later, rerun setup again.
+3. if this machine previously used pipelane's machine-local Codex wrappers, run `npm run pipelane:setup` once to prune them
+4. open the repo in Codex
+5. reopen or restart Codex if tracked skills or aliases changed while it was already open
 
 ### Each release operator
 

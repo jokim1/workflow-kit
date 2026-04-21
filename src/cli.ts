@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 
-import { existsSync, readFileSync } from 'node:fs';
-import path from 'node:path';
-
 import { handlePipelane } from './dashboard/launcher.ts';
 import { getDashboardOptions, startDashboardServer } from './dashboard/server.ts';
 import { parseBootstrapArgs, runBootstrap } from './operator/bootstrap.ts';
 import { installClaudeBootstrapSkill } from './operator/claude-install.ts';
-import { installCodexWrappers } from './operator/codex-install.ts';
+import { installCodexBootstrapSkill } from './operator/codex-install.ts';
 import { handleConfigure } from './operator/commands/configure.ts';
 import { initConsumerRepo, setupConsumerRepo, syncDocsOnly } from './operator/docs.ts';
 import { runOperator } from './operator/index.ts';
-import { CONFIG_FILENAME, resolveRepoRoot, resolveWorkflowAliases, type WorkflowConfig } from './operator/state.ts';
 import { parseUpdateArgs, runUpdate } from './operator/update.ts';
 
 function valueAfter(args: string[], flag: string): string {
@@ -66,7 +62,7 @@ async function main(): Promise<void> {
       `Config: ${result.configPath}`,
       'Commit the tracked Pipelane files before using pipelane:new from a remote-backed repo.',
       'Next: run npm run pipelane:setup',
-      'Each Codex user must run setup locally on their own machine.',
+      'Tracked Codex skills will be written into .agents/skills for the repo.',
     ].join('\n') + '\n');
     return;
   }
@@ -81,12 +77,16 @@ async function main(): Promise<void> {
         ? `Initialized tracked Pipelane files for ${result.displayName}.`
         : 'Repo was already pipelane-enabled; refreshed local setup.',
       result.createdClaude ? 'Created local CLAUDE.md from the Pipelane template.' : 'Preserved existing local CLAUDE.md.',
-      `Installed Codex wrappers in ${result.codexHome}`,
-      `Slash commands: ${result.installedWrappers.join(', ')}`,
       'Commit the tracked Pipelane files before using pipelane:new from a remote-backed repo.',
       'Claude picks up the tracked .claude/commands files after the repo is initialized.',
-      'If Codex was already open, reopen the repo or restart the client to refresh slash commands.',
     ];
+    if (result.installedCodexSkills.length > 0) {
+      lines.splice(4, 0, `Synced Codex skills in ${result.codexSkillsDir}`, `Slash commands: ${result.installedCodexSkills.join(', ')}`);
+      lines.push('Codex picks up the tracked .agents/skills files after the repo is initialized.');
+    } else {
+      lines.push('Skipped tracked Codex skill sync because syncDocs.codexSkills is false.');
+    }
+    lines.push('If Claude or Codex was already open, reopen the repo or restart the client to refresh commands and skills.');
     if (result.warnings.length > 0) {
       lines.push('Readiness warnings:');
       lines.push(...result.warnings.map((warning) => `- ${warning}`));
@@ -100,12 +100,26 @@ async function main(): Promise<void> {
     process.stdout.write([
       `Pipelane setup complete in ${result.repoRoot}`,
       result.createdClaude ? 'Created local CLAUDE.md from the Pipelane template.' : 'Preserved existing local CLAUDE.md.',
-      `Installed Codex wrappers in ${result.codexHome}`,
-      `Slash commands: ${result.installedWrappers.join(', ')}`,
-      'Each Codex user must run npm run pipelane:setup on their own machine.',
-      'If Claude or Codex was already open, reopen the repo or restart the client to refresh slash commands.',
       'Release mode still requires local deploy configuration in CLAUDE.md.',
-    ].join('\n') + '\n');
+    ].concat(
+      result.installedCodexSkills.length > 0
+        ? [
+            `Synced Codex skills in ${result.codexSkillsDir}`,
+            `Slash commands: ${result.installedCodexSkills.join(', ')}`,
+            'Codex picks up the tracked .agents/skills files from the repo.',
+          ]
+        : [
+            'Skipped tracked Codex skill sync because syncDocs.codexSkills is false.',
+          ],
+      result.removedLegacyCodexSkills.length > 0
+        ? [
+            `Removed legacy machine-local wrapper skills: ${result.removedLegacyCodexSkills.join(', ')}`,
+          ]
+        : [],
+      [
+        'If Claude or Codex was already open, reopen the repo or restart the client to refresh commands and skills.',
+      ],
+    ).join('\n') + '\n');
     return;
   }
 
@@ -127,15 +141,15 @@ async function main(): Promise<void> {
   }
 
   if (command === 'install-codex') {
-    const repoRoot = resolveRepoRoot(process.cwd(), true);
-    const configPath = path.join(repoRoot, CONFIG_FILENAME);
-    const config = existsSync(configPath)
-      ? JSON.parse(readFileSync(configPath, 'utf8')) as WorkflowConfig
-      : null;
-    const result = config
-      ? installCodexWrappers({ repoRoot, aliases: resolveWorkflowAliases(config.aliases) })
-      : installCodexWrappers();
-    process.stdout.write(`Installed Codex wrappers in ${result.codexHome}: ${result.installed.join(', ')}\n`);
+    const result = installCodexBootstrapSkill();
+    const lines = [
+      `Installed Codex bootstrap skill in ${result.codexHome}: ${result.installed.join(', ')}`,
+    ];
+    if (result.removedLegacySkills.length > 0) {
+      lines.push(`Removed legacy machine-local wrapper skills: ${result.removedLegacySkills.join(', ')}`);
+    }
+    lines.push('Repo-tracked Codex skills now live under .agents/skills after pipelane bootstrap/setup.');
+    process.stdout.write(lines.join('\n') + '\n');
     return;
   }
 
