@@ -1703,6 +1703,19 @@
       return state.snapshot?.data?.branches?.find((branch) => branch.name === state.selectedBranchName) || null;
     }
 
+    function clearBranchDetailState() {
+      state.selectedBranchName = '';
+      state.detailOpen = false;
+      state.branchDetails = null;
+      state.patchEnvelope = null;
+      state.selectedFileKey = '';
+      state.pendingConfirmation = null;
+    }
+
+    function hasOpenBranchDetail() {
+      return Boolean(state.detailOpen && state.selectedBranchName);
+    }
+
     function laneOrder() {
       return state.snapshot?.data?.boardContext?.laneOrder || ['Local', 'PR', 'Base', 'Staging', 'Production'];
     }
@@ -2610,11 +2623,7 @@
         const branches = state.snapshot?.data?.branches || [];
         const stillExists = branches.some((branch) => branch.name === state.selectedBranchName);
         if (!stillExists) {
-          state.selectedBranchName = '';
-          state.detailOpen = false;
-          state.branchDetails = null;
-          state.patchEnvelope = null;
-          state.selectedFileKey = '';
+          clearBranchDetailState();
         }
       } finally {
         state.loading.snapshot = false;
@@ -2683,7 +2692,7 @@
 
     async function refreshAfterExecution() {
       await loadSnapshot(true);
-      if (state.selectedBranchName) {
+      if (hasOpenBranchDetail()) {
         await loadBranch(state.selectedBranchName, true);
       }
     }
@@ -2913,8 +2922,7 @@
     }
 
     function closeDetail() {
-      state.detailOpen = false;
-      state.pendingConfirmation = null;
+      clearBranchDetailState();
       closeMenus();
       render();
     }
@@ -2923,7 +2931,7 @@
       clearTimeout(state.refreshTimer);
       state.refreshTimer = setTimeout(async () => {
         await loadSnapshot(false);
-        if (state.selectedBranchName && state.branchDetails) {
+        if (hasOpenBranchDetail()) {
           await loadBranch(state.selectedBranchName, false);
         }
         scheduleAutoRefresh();
@@ -3054,7 +3062,7 @@
     document.getElementById('refresh-button').addEventListener('click', async () => {
       closeMenus();
       await loadSnapshot(true);
-      if (state.selectedBranchName) {
+      if (hasOpenBranchDetail()) {
         await loadBranch(state.selectedBranchName, true);
       }
       scheduleAutoRefresh();
