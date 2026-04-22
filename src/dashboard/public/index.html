@@ -221,6 +221,52 @@
       color: var(--muted);
     }
 
+    .button.icon {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+    }
+
+    .button.icon:hover:not(:disabled) {
+      color: var(--text);
+      transform: none;
+    }
+
+    .button.icon svg {
+      width: 15px;
+      height: 15px;
+      display: block;
+    }
+
+    .hero-icon-actions {
+      display: inline-flex;
+      gap: 6px;
+    }
+
+    .hero-statusline {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--subtle);
+      letter-spacing: 0.02em;
+      text-align: right;
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+
+    .hero-statusline .hero-statusline-sep {
+      color: rgba(132, 169, 189, 0.32);
+    }
+
+    .hero-statusline .hero-statusline-bad {
+      color: var(--blocked);
+    }
+
     .pill-row {
       display: flex;
       flex-wrap: wrap;
@@ -245,6 +291,37 @@
       color: var(--text);
       font-weight: 600;
     }
+
+    .pill-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--unknown);
+      flex-shrink: 0;
+    }
+
+    .pill.tone-healthy { border-color: rgba(88, 214, 141, 0.45); background: var(--healthy-soft); color: #bde8cf; }
+    .pill.tone-healthy .pill-dot { background: var(--healthy); box-shadow: 0 0 0 3px rgba(88, 214, 141, 0.15); }
+    .pill.tone-healthy strong { color: #d9f3e4; }
+
+    .pill.tone-running { border-color: rgba(108, 180, 238, 0.45); background: var(--accent-soft); color: #bfdcf4; }
+    .pill.tone-running .pill-dot { background: var(--running); box-shadow: 0 0 0 3px rgba(108, 180, 238, 0.15); }
+    .pill.tone-running strong { color: #dcecf8; }
+
+    .pill.tone-degraded { border-color: rgba(255, 143, 90, 0.45); background: rgba(255, 143, 90, 0.12); color: #f4c5ad; }
+    .pill.tone-degraded .pill-dot { background: var(--degraded); box-shadow: 0 0 0 3px rgba(255, 143, 90, 0.15); }
+    .pill.tone-degraded strong { color: #f9d7c4; }
+
+    .pill.tone-blocked { border-color: rgba(255, 107, 107, 0.5); background: var(--danger-soft); color: #f1bbbb; }
+    .pill.tone-blocked .pill-dot { background: var(--blocked); box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.18); }
+    .pill.tone-blocked strong { color: #f5d2d2; }
+
+    .pill.tone-stale { border-color: rgba(255, 179, 71, 0.45); background: var(--warning-soft); color: #ecd4a5; }
+    .pill.tone-stale .pill-dot { background: var(--stale); box-shadow: 0 0 0 3px rgba(255, 179, 71, 0.15); }
+    .pill.tone-stale strong { color: #f3e1bb; }
+
+    .pill.tone-unknown .pill-dot { background: var(--unknown); }
 
     .meta-grid {
       display: grid;
@@ -1450,12 +1527,16 @@
             <div class="pill-row" id="hero-pills"></div>
           </div>
           <div class="hero-actions">
-            <div class="button-row">
-              <button class="button" id="settings-button" type="button" data-settings-open="true">Settings</button>
-              <button class="button primary" id="refresh-button" type="button">Refresh snapshot</button>
+            <div class="hero-icon-actions">
+              <button class="button icon" id="settings-button" type="button" data-settings-open="true" aria-label="Settings" title="Settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.604.846 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              </button>
+              <button class="button icon" id="refresh-button" type="button" aria-label="Refresh snapshot" title="Refresh snapshot">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              </button>
             </div>
             <div id="hero-mode"></div>
-            <div class="footer-note" id="health-note">Checking local dashboard health…</div>
+            <div class="hero-statusline" id="hero-statusline">Checking local dashboard health…</div>
           </div>
         </div>
       </section>
@@ -1974,11 +2055,131 @@
 
     function heroModeNote(mode, release) {
       const blocked = release.blockedSurfaces || [];
-      const requested = (release.requestedSurfaces || []).join(', ') || '—';
+      const requested = (release.requestedSurfaces || []).join(' · ') || '—';
       if (blocked.length) {
-        return `Blocked: ${blocked.join(', ')}`;
+        return `Blocked: ${blocked.join(' · ')}`;
       }
-      return mode === 'release' ? `Release scope: ${requested}` : `Build scope: ${requested}`;
+      return requested;
+    }
+
+    const PILL_TONES = new Set(['healthy', 'running', 'degraded', 'blocked', 'stale', 'unknown']);
+    const TONE_ALIASES = { bypassed: 'stale', awaiting_preflight: 'running' };
+
+    function normalizeTone(tone) {
+      if (PILL_TONES.has(tone)) return tone;
+      return TONE_ALIASES[tone] || 'unknown';
+    }
+
+    function renderPill(label, value, tone, title) {
+      const toneClass = `tone-${normalizeTone(tone)}`;
+      const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+      return `<div class="pill ${toneClass}"${titleAttr}><span class="pill-dot"></span><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+    }
+
+    function describeReleaseGate(release) {
+      const state = release?.state || 'unknown';
+      const labels = {
+        healthy: 'healthy',
+        degraded: 'degraded',
+        blocked: 'blocked',
+        stale: 'stale',
+        running: 'running',
+        bypassed: 'override active',
+        awaiting_preflight: 'awaiting preflight',
+        unknown: 'unknown',
+      };
+      return {
+        tone: state,
+        value: labels[state] || state,
+        title: release?.reason || release?.message || '',
+      };
+    }
+
+    function isSmokeLockedFor(smokeState, environment) {
+      return (smokeState?.locks || []).some((lock) => lock.environment === environment);
+    }
+
+    function describeSmokePill(smokeState, environment) {
+      const record = smokeState ? smokeState[environment] : null;
+      if (isSmokeLockedFor(smokeState, environment)) {
+        const lock = (smokeState?.locks || []).find((entry) => entry.environment === environment);
+        return { tone: 'running', value: 'running', title: lock ? `${lock.operation} ${lock.runId}` : '' };
+      }
+      if (!record) {
+        return { tone: 'unknown', value: '—', title: `no ${environment} smoke history yet` };
+      }
+      if (record.status === 'failed') {
+        return { tone: 'blocked', value: 'fail', title: `failed @ ${record.sha.slice(0, 7)} · ${record.finishedAt}` };
+      }
+      const passTitle = `${record.status} @ ${record.sha.slice(0, 7)} · ${record.finishedAt}`;
+      return { tone: 'healthy', value: 'pass', title: passTitle };
+    }
+
+    function describeStagingPill(release, smokeState) {
+      const smoke = describeSmokePill(smokeState, 'staging');
+      if (smoke.tone !== 'healthy') return smoke;
+      const probeState = release?.probeState;
+      if (probeState === 'degraded') {
+        return { tone: 'degraded', value: 'degraded', title: `staging probe degraded (${smoke.title})` };
+      }
+      if (probeState === 'stale') {
+        return { tone: 'stale', value: 'stale', title: `staging probe stale (${smoke.title})` };
+      }
+      return smoke;
+    }
+
+    function describeWorktreePill(activeTask) {
+      if (!activeTask) {
+        return { tone: 'unknown', value: 'detached', title: 'no active pipelane task worktree' };
+      }
+      return {
+        tone: 'healthy',
+        value: activeTask.taskSlug,
+        title: `${activeTask.taskSlug} on ${activeTask.branchName}`,
+      };
+    }
+
+    function buildHeroPills(boardContext, smokeState) {
+      const release = boardContext?.releaseReadiness || {};
+      const gate = describeReleaseGate(release);
+      const staging = describeStagingPill(release, smokeState);
+      const prod = describeSmokePill(smokeState, 'prod');
+      const worktree = describeWorktreePill(boardContext?.activeTask);
+      return [
+        renderPill('Release Gate', gate.value, gate.tone, gate.title),
+        renderPill('Staging', staging.value, staging.tone, staging.title),
+        renderPill('Prod', prod.value, prod.tone, prod.title),
+        renderPill('Base', boardContext?.baseBranch || 'main', 'unknown', ''),
+        renderPill('Worktree', worktree.value, worktree.tone, worktree.title),
+      ];
+    }
+
+    function renderHeroStatusline(snapshot) {
+      const el = document.getElementById('hero-statusline');
+      if (!el) return;
+      const health = state.health;
+      const sep = '<span class="hero-statusline-sep">·</span>';
+      if (!health) {
+        el.innerHTML = '<span>Checking local dashboard health…</span>';
+        return;
+      }
+      const repoName = basenameFromPath(health.repoRoot) || 'repo';
+      const apiStatus = health.pipelaneApiConfigured
+        ? '<span>api ready</span>'
+        : '<span class="hero-statusline-bad" title="Set a pipelane:api script in package.json">api not-configured</span>';
+      const schemaVersion = snapshot?.schemaVersion ? `<span>v${escapeHtml(snapshot.schemaVersion)}</span>` : '';
+      const checkedAt = snapshot?.data?.boardContext?.overallFreshness?.checkedAt;
+      const refreshed = checkedAt ? `<span>${escapeHtml(relativeTime(checkedAt))}</span>` : '';
+      const repoEl = `<span title="${escapeHtml(health.repoRoot || '')}">${escapeHtml(repoName)}</span>`;
+      const parts = [repoEl, apiStatus, schemaVersion, refreshed].filter(Boolean);
+      el.innerHTML = parts.join(sep);
+    }
+
+    function basenameFromPath(value) {
+      if (!value) return '';
+      const trimmed = String(value).replace(/[\\/]+$/, '');
+      const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+      return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
     }
 
     function buildAttentionContextItems(boardContext) {
@@ -1986,11 +2187,16 @@
       const activeTask = boardContext?.activeTask;
       const release = boardContext?.releaseReadiness || {};
       const mode = boardContext?.mode || 'unknown';
+      const smoke = state.snapshot?.data?.smoke;
+      const health = state.health;
 
       if (activeTask) {
         items.push(`Current worktree: ${activeTask.taskSlug} on ${activeTask.branchName}.`);
       } else {
         items.push('Current checkout is not an active pipelane task worktree.');
+        if (health?.repoRoot) {
+          items.push(`Serving ${health.repoRoot}.`);
+        }
       }
 
       if (mode === 'release' && release.effectiveOverride?.reason) {
@@ -2002,6 +2208,14 @@
         && (release.reason || (release.blockedSurfaces || []).length)
       ) {
         items.push(release.reason || `Release gate is ${release.state}.`);
+      }
+
+      const stagingSmoke = smoke?.staging;
+      if (stagingSmoke?.finishedAt && stagingSmoke.status !== 'failed') {
+        const ageHours = (Date.now() - new Date(stagingSmoke.finishedAt).getTime()) / 3_600_000;
+        if (Number.isFinite(ageHours) && ageHours >= 24) {
+          items.push(`Staging smoke last ran ${relativeTime(stagingSmoke.finishedAt)} — consider re-running before promote.`);
+        }
       }
 
       return items;
@@ -2095,12 +2309,8 @@
       document.getElementById('hero-title').textContent = settings.boardTitle || DEFAULT_BOARD_TITLE;
       document.getElementById('hero-copy').textContent = settings.boardSubtitle || DEFAULT_BOARD_SUBTITLE;
       document.title = settings.boardTitle || DEFAULT_BOARD_TITLE;
-      const pills = [];
-      if (boardContext) {
-        pills.push(`<div class="pill"><span>Base</span><strong>${escapeHtml(boardContext.baseBranch || 'main')}</strong></div>`);
-        pills.push(`<div class="pill"><span>Freshness</span><strong>${escapeHtml(boardContext.overallFreshness?.state || 'unknown')}</strong></div>`);
-        pills.push(`<div class="pill"><span>Last Checked</span><strong>${escapeHtml(relativeTime(boardContext.overallFreshness?.checkedAt))}</strong></div>`);
-      }
+      const smokeState = state.snapshot?.data?.smoke;
+      const pills = boardContext ? buildHeroPills(boardContext, smokeState) : [];
       document.getElementById('hero-pills').innerHTML = pills.join('') || '<div class="pill"><span>Snapshot</span><strong>Loading…</strong></div>';
       if (!boardContext) {
         heroMode.innerHTML = `
@@ -2148,17 +2358,7 @@
         `;
       }
 
-      const health = state.health;
-      const healthNote = document.getElementById('health-note');
-      if (!health) {
-        healthNote.textContent = 'Checking local dashboard health…';
-        return;
-      }
-      if (!health.pipelaneApiConfigured) {
-        healthNote.textContent = `Repo ${health.repoRoot} is reachable, but pipelane:api is not configured there.`;
-        return;
-      }
-      healthNote.textContent = `Serving ${health.repoRoot} · pipelane:api ready · refreshed ${relativeTime(state.snapshot?.data?.boardContext?.overallFreshness?.checkedAt)}`;
+      renderHeroStatusline(state.snapshot);
     }
 
     function renderAttention() {
