@@ -26,6 +26,20 @@ This repo uses `pipelane` for task workspaces, PR prep, merge handoff, and deplo
 - `pipelane:pr` stages the active task worktree with `git add -A`, so keep the task workspace isolated.
 - When backend or multi-surface impact is plausible, use explicit `--surfaces`.
 
+### Worktree deps setup
+
+- `pipelane:new` and `pipelane:resume` symlink the task worktree's `node_modules` into the shared repo's `node_modules` so deps are instantly available without re-installing per worktree.
+- **Do NOT run `npm ci` or `npm install` directly in a task worktree** until you have broken the symlink. npm's reify step treats the symlinked `node_modules` as a non-directory to remove, and some npm versions follow the symlink and wipe the shared repo's deps as a side effect.
+- Safe pattern for reinstalling deps in a task worktree:
+
+  ```bash
+  [ -L node_modules ] && rm node_modules
+  npm install
+  ```
+
+  `rm` on a symlink only removes the symlink; it does not touch the symlink's target.
+- If only running, not reinstalling (tests, typecheck, dev server), the symlinked `node_modules` works as-is — no action needed.
+
 ### Docs
 
 - Use `docs/RELEASE_WORKFLOW.md` for the full operator workflow.

@@ -53,6 +53,23 @@ export function resolveTaskWorktreeRoot(commonDir: string, config: WorkflowConfi
   return path.join(path.dirname(sharedRepoRoot), config.taskWorktreeDirName);
 }
 
+/**
+ * Returned whenever a symlinked node_modules is present in a worktree. Running
+ * `npm ci` or `npm install` in a worktree whose node_modules is a symlink
+ * can cause npm's reify step to wipe the *shared* node_modules as a side
+ * effect (npm treats the symlink as a "non-directory" to remove, and some
+ * npm versions follow into the target first). Agents running dep setup
+ * autonomously hit this regularly — ship the mitigation in-band so it is
+ * impossible to miss.
+ */
+export const SHARED_NODE_MODULES_NPMCI_WARNING =
+  'node_modules in this worktree is a symlink into the shared repo\'s ' +
+  'node_modules. Do NOT run `npm ci` or `npm install` in this worktree ' +
+  'without breaking the symlink first — npm may wipe the shared ' +
+  'node_modules as a side effect. To safely reinstall deps here: ' +
+  '`rm node_modules && npm install` (the `rm` only removes the symlink, ' +
+  'not its target).';
+
 export function ensureSharedNodeModulesLink(
   commonDir: string,
   worktreePath: string,
@@ -77,7 +94,7 @@ export function ensureSharedNodeModulesLink(
     const existing = lstatSync(targetNodeModules);
     if (existing.isSymbolicLink()) {
       if (existsSync(targetNodeModules)) {
-        return null;
+        return SHARED_NODE_MODULES_NPMCI_WARNING;
       }
       unlinkSync(targetNodeModules);
     }
@@ -93,7 +110,7 @@ export function ensureSharedNodeModulesLink(
 
   try {
     symlinkSync(sourceNodeModules, targetNodeModules, process.platform === 'win32' ? 'junction' : 'dir');
-    return null;
+    return SHARED_NODE_MODULES_NPMCI_WARNING;
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     return `Could not link shared node_modules into ${worktreePath}: ${err.message}`;
