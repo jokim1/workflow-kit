@@ -1,4 +1,4 @@
-<!-- workflow-kit:command:repo-guard -->
+<!-- pipelane:command:repo-guard -->
 Verify the current checkout is safe for a task, or create an isolated task worktree when it is not.
 
 Run:
@@ -21,5 +21,5 @@ This command:
 
 Display the output directly. If a new worktree is created, call out that the chat/workspace has not moved automatically yet.
 
-<!-- workflow-kit:consumer-extension:start -->
-<!-- workflow-kit:consumer-extension:end -->
+<!-- pipelane:consumer-extension:start -->
+<!-- pipelane:consumer-extension:end -->
