@@ -267,14 +267,21 @@
       color: var(--blocked);
     }
 
+    .hero-panel {
+      overflow: visible;
+    }
+
     .pill-row {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       margin-top: 16px;
+      position: relative;
+      z-index: 30;
     }
 
     .pill {
+      position: relative;
       display: inline-flex;
       align-items: center;
       gap: 8px;
@@ -285,6 +292,12 @@
       background: rgba(255, 255, 255, 0.03);
       font-size: 12px;
       white-space: nowrap;
+      cursor: help;
+      outline: none;
+    }
+
+    .pill:focus-visible {
+      box-shadow: 0 0 0 3px rgba(108, 180, 238, 0.22);
     }
 
     .pill strong {
@@ -322,6 +335,112 @@
     .pill.tone-stale strong { color: #f3e1bb; }
 
     .pill.tone-unknown .pill-dot { background: var(--unknown); }
+
+    .pill-tooltip {
+      position: absolute;
+      top: calc(100% + 10px);
+      left: 0;
+      z-index: 90;
+      width: min(430px, calc(100vw - 36px));
+      max-height: min(560px, calc(100vh - 150px));
+      overflow: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      padding: 12px;
+      background: rgba(7, 16, 21, 0.97);
+      color: var(--text);
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.48);
+      white-space: normal;
+      line-height: 1.45;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(-4px);
+      transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+      pointer-events: none;
+      text-align: left;
+    }
+
+    .pill:nth-last-child(-n+2) .pill-tooltip {
+      left: auto;
+      right: 0;
+    }
+
+    .pill:hover .pill-tooltip,
+    .pill:focus .pill-tooltip,
+    .pill:focus-within .pill-tooltip {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    .pill-tooltip-kicker {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--subtle);
+    }
+
+    .pill-tooltip-heading {
+      margin-top: 4px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .pill-tooltip-summary {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pill-tooltip-rows {
+      display: grid;
+      grid-template-columns: max-content minmax(0, 1fr);
+      gap: 6px 10px;
+      margin: 10px 0 0;
+      padding: 10px 0 0;
+      border-top: 1px solid var(--line);
+      font-size: 12px;
+    }
+
+    .pill-tooltip-rows dt {
+      margin: 0;
+      color: var(--subtle);
+    }
+
+    .pill-tooltip-rows dd {
+      margin: 0;
+      min-width: 0;
+      color: var(--text);
+      word-break: break-word;
+    }
+
+    .pill-tooltip-section {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    .pill-tooltip-section-title {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .pill-tooltip-list {
+      margin: 7px 0 0;
+      padding-left: 16px;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .pill-tooltip-list li + li {
+      margin-top: 5px;
+    }
 
     .meta-grid {
       display: grid;
@@ -1634,7 +1753,7 @@
 <body>
   <div class="app">
     <main class="stack">
-      <section class="panel">
+      <section class="panel hero-panel">
         <div class="hero">
           <div>
             <h1 class="hero-title" id="hero-title">Pipelane</h1>
@@ -2330,10 +2449,157 @@
       return TONE_ALIASES[tone] || 'unknown';
     }
 
-    function renderPill(label, value, tone, title) {
+    function textOrDash(value) {
+      if (value === null || value === undefined || value === '') return '—';
+      return String(value);
+    }
+
+    function shortSha(value) {
+      return value ? String(value).slice(0, 7) : '—';
+    }
+
+    function boolLabel(value) {
+      if (value === true) return 'yes';
+      if (value === false) return 'no';
+      return 'unknown';
+    }
+
+    function listLabel(values, empty = '—') {
+      return Array.isArray(values) && values.length ? values.join(', ') : empty;
+    }
+
+    function freshnessLabel(freshness) {
+      if (!freshness) return 'freshness unavailable';
+      const observed = freshness.observedAt ? `observed ${formatDateWithRelative(freshness.observedAt)}` : 'not observed';
+      const checked = freshness.checkedAt ? `checked ${formatDateWithRelative(freshness.checkedAt)}` : 'not checked';
+      return `${freshness.state || 'unknown'} · ${observed} · ${checked}`;
+    }
+
+    function smokeSummary(record, environment) {
+      if (!record) return `no ${environment} smoke run recorded`;
+      const sha = shortSha(record.sha);
+      const finished = record.finishedAt ? ` · ${formatDateWithRelative(record.finishedAt)}` : '';
+      const retries = record.retryCount ? ` · ${record.retryCount} retry` : '';
+      return `${record.status || 'unknown'} @ ${sha}${finished}${retries}`;
+    }
+
+    function sourceHealthLine(item) {
+      const freshness = item.freshness ? ` (${freshnessLabel(item.freshness)})` : '';
+      const blocking = item.blocking ? 'blocking' : 'advisory';
+      return `${item.name}: ${item.state || 'unknown'} · ${blocking} · ${item.reason || 'no reason'}${freshness}`;
+    }
+
+    function sourceHealthByName(sourceHealth, names) {
+      const wanted = new Set(names);
+      return (sourceHealth || []).filter((item) => wanted.has(item.name));
+    }
+
+    function sourceHealthByPrefix(sourceHealth, prefixes) {
+      return (sourceHealth || []).filter((item) => prefixes.some((prefix) => String(item.name || '').startsWith(prefix)));
+    }
+
+    function issueLine(issue) {
+      const action = issueActionHint(issue);
+      const next = action ? ` Next: ${action}.` : '';
+      return `${issue.severity || 'info'} · ${issue.message || issue.code || 'Attention needed.'}${next}`;
+    }
+
+    function issueActionHint(issue) {
+      const aliases = currentHelpAliases();
+      switch (issue?.action) {
+        case 'doctor.probe':
+          return `run ${aliases.doctor} probe`;
+        case 'doctor.diagnose':
+          return `run ${aliases.doctor}`;
+        case 'smoke.plan':
+          return `run ${aliases.smoke} -- plan`;
+        case 'smoke.staging':
+          return `run ${aliases.smoke} staging`;
+        case 'deploy.staging':
+          return `run ${aliases.deploy} staging`;
+        case 'deploy.prod':
+          return `run ${aliases.deploy} prod`;
+        default:
+          return issue?.action ? `run ${issue.action}` : '';
+      }
+    }
+
+    function uniqueLines(lines) {
+      const seen = new Set();
+      return (lines || [])
+        .map((line) => textOrDash(line).trim())
+        .filter((line) => line && line !== '—')
+        .filter((line) => {
+          if (seen.has(line)) return false;
+          seen.add(line);
+          return true;
+        });
+    }
+
+    function normalizeTooltip(tooltip) {
+      if (!tooltip) return null;
+      if (typeof tooltip === 'string') {
+        return { heading: 'Details', summary: tooltip, rows: [], sections: [] };
+      }
+      return {
+        kicker: tooltip.kicker || '',
+        heading: tooltip.heading || 'Details',
+        summary: tooltip.summary || '',
+        rows: tooltip.rows || [],
+        sections: tooltip.sections || [],
+      };
+    }
+
+    function tooltipText(tooltip) {
+      const normalized = normalizeTooltip(tooltip);
+      if (!normalized) return '';
+      const rows = normalized.rows.map((row) => `${row[0]} ${textOrDash(row[1])}`);
+      const sections = normalized.sections.flatMap((section) => [
+        section.title || '',
+        ...(section.items || []),
+      ]);
+      return uniqueLines([normalized.heading, normalized.summary, ...rows, ...sections]).join('. ');
+    }
+
+    function renderPillTooltip(tooltip) {
+      const normalized = normalizeTooltip(tooltip);
+      if (!normalized) return '';
+      const rows = normalized.rows
+        .filter((row) => row && textOrDash(row[1]).trim())
+        .map((row) => `
+          <dt>${escapeHtml(row[0])}</dt>
+          <dd>${escapeHtml(textOrDash(row[1]))}</dd>
+        `)
+        .join('');
+      const sections = normalized.sections
+        .map((section) => ({
+          title: section.title || '',
+          items: uniqueLines(section.items || []),
+        }))
+        .filter((section) => section.title || section.items.length)
+        .map((section) => `
+          <div class="pill-tooltip-section">
+            ${section.title ? `<div class="pill-tooltip-section-title">${escapeHtml(section.title)}</div>` : ''}
+            ${section.items.length ? `<ul class="pill-tooltip-list">${section.items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+          </div>
+        `)
+        .join('');
+      return `
+        <div class="pill-tooltip" role="tooltip">
+          ${normalized.kicker ? `<div class="pill-tooltip-kicker">${escapeHtml(normalized.kicker)}</div>` : ''}
+          <div class="pill-tooltip-heading">${escapeHtml(normalized.heading)}</div>
+          ${normalized.summary ? `<div class="pill-tooltip-summary">${escapeHtml(normalized.summary)}</div>` : ''}
+          ${rows ? `<dl class="pill-tooltip-rows">${rows}</dl>` : ''}
+          ${sections}
+        </div>
+      `;
+    }
+
+    function renderPill(label, value, tone, tooltip) {
       const toneClass = `tone-${normalizeTone(tone)}`;
-      const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
-      return `<div class="pill ${toneClass}"${titleAttr}><span class="pill-dot"></span><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+      const aria = tooltipText(tooltip);
+      const ariaAttr = aria ? ` aria-label="${escapeHtml(`${label}: ${value}. ${aria}`)}"` : '';
+      return `<div class="pill ${toneClass}" tabindex="0"${ariaAttr}><span class="pill-dot"></span><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${renderPillTooltip(tooltip)}</div>`;
     }
 
     function describeReleaseGate(release) {
@@ -2351,7 +2617,6 @@
       return {
         tone: state,
         value: labels[state] || state,
-        title: release?.reason || release?.message || '',
       };
     }
 
@@ -2363,16 +2628,15 @@
       const record = smokeState ? smokeState[environment] : null;
       if (isSmokeLockedFor(smokeState, environment)) {
         const lock = (smokeState?.locks || []).find((entry) => entry.environment === environment);
-        return { tone: 'running', value: 'running', title: lock ? `${lock.operation} ${lock.runId}` : '' };
+        return { tone: 'running', value: 'running', detail: lock ? `${lock.operation} ${lock.runId}` : '' };
       }
       if (!record) {
-        return { tone: 'unknown', value: '—', title: `no ${environment} smoke history yet` };
+        return { tone: 'unknown', value: '—', detail: `no ${environment} smoke history yet` };
       }
       if (record.status === 'failed') {
-        return { tone: 'blocked', value: 'fail', title: `failed @ ${record.sha.slice(0, 7)} · ${record.finishedAt}` };
+        return { tone: 'blocked', value: 'fail', detail: `failed @ ${shortSha(record.sha)} · ${record.finishedAt}` };
       }
-      const passTitle = `${record.status} @ ${record.sha.slice(0, 7)} · ${record.finishedAt}`;
-      return { tone: 'healthy', value: 'pass', title: passTitle };
+      return { tone: 'healthy', value: 'pass', detail: smokeSummary(record, environment) };
     }
 
     function describeStagingPill(release, smokeState) {
@@ -2380,22 +2644,22 @@
       if (smoke.tone !== 'healthy') return smoke;
       const probeState = release?.probeState;
       if (probeState === 'degraded') {
-        return { tone: 'degraded', value: 'degraded', title: `staging probe degraded (${smoke.title})` };
+        return { tone: 'degraded', value: 'degraded', detail: `staging probe degraded (${smoke.detail})` };
       }
       if (probeState === 'stale') {
-        return { tone: 'stale', value: 'stale', title: `staging probe stale (${smoke.title})` };
+        return { tone: 'stale', value: 'stale', detail: `staging probe stale (${smoke.detail})` };
       }
       return smoke;
     }
 
     function describeWorktreePill(activeTask) {
       if (!activeTask) {
-        return { tone: 'unknown', value: 'detached', title: 'no active pipelane task worktree' };
+        return { tone: 'unknown', value: 'detached', detail: 'no active pipelane task worktree' };
       }
       return {
         tone: 'healthy',
         value: activeTask.taskSlug,
-        title: `${activeTask.taskSlug} on ${activeTask.branchName}`,
+        detail: `${activeTask.taskSlug} on ${activeTask.branchName}`,
       };
     }
 
@@ -2405,13 +2669,252 @@
       const staging = describeStagingPill(release, smokeState);
       const prod = describeSmokePill(smokeState, 'prod');
       const worktree = describeWorktreePill(boardContext?.activeTask);
+      const sourceHealth = state.snapshot?.data?.sourceHealth || [];
+      const attention = state.snapshot?.data?.attention || [];
       return [
-        renderPill('Release Gate', gate.value, gate.tone, gate.title),
-        renderPill('Staging', staging.value, staging.tone, staging.title),
-        renderPill('Prod', prod.value, prod.tone, prod.title),
-        renderPill('Base', boardContext?.baseBranch || 'main', 'unknown', ''),
-        renderPill('Worktree', worktree.value, worktree.tone, worktree.title),
+        renderPill('Release Gate', gate.value, gate.tone, buildReleaseGateTooltip(boardContext, release, sourceHealth, attention)),
+        renderPill('Staging', staging.value, staging.tone, buildStagingTooltip(boardContext, release, smokeState, sourceHealth, attention)),
+        renderPill('Prod', prod.value, prod.tone, buildProdTooltip(boardContext, smokeState, sourceHealth)),
+        renderPill('Base', boardContext?.baseBranch || 'main', 'unknown', buildBaseTooltip(boardContext)),
+        renderPill('Worktree', worktree.value, worktree.tone, buildWorktreeTooltip(boardContext)),
       ];
+    }
+
+    function releaseGateMeaning(stateValue) {
+      switch (stateValue) {
+        case 'healthy':
+          return 'Ready means every requested surface has the required local config, an observed staging success, and fresh healthy probes.';
+        case 'degraded':
+          return 'Degraded means Pipelane has enough configuration to look at hosted release signals, but at least one observed signal is unhealthy or stale.';
+        case 'blocked':
+          return 'Blocked means a required condition is missing or failing: config, staging deploy history, probes, smoke coverage, or an unsupported surface.';
+        case 'stale':
+          return 'Stale means the board has data, but it is outside its freshness window.';
+        case 'bypassed':
+          return 'Bypassed means an explicit override is active. Treat production work as manual-risky until the override is removed or the gate is healthy.';
+        case 'unknown':
+        default:
+          return 'Unknown means Pipelane does not yet have enough observations to prove release readiness.';
+      }
+    }
+
+    function buildReleaseGateTooltip(boardContext, release, sourceHealth, attention) {
+      const aliases = currentHelpAliases();
+      const gateIssues = (attention || []).filter((item) =>
+        item.blocking
+        || item.lane === 'staging'
+        || item.lane === 'production'
+        || String(item.code || '').startsWith('probe.')
+        || String(item.code || '').startsWith('smoke.'),
+      );
+      const releaseSources = sourceHealthByPrefix(sourceHealth, ['deployProbe.', 'smoke.']);
+      const next = release.state === 'healthy'
+        ? [
+            `If you are in release mode, promote only the same merged SHA that passed staging; production deploys use ${aliases.deploy} prod and require confirmation.`,
+            'Keep an eye on Attention after each action; it shows the exact blocker if the gate changes.',
+          ]
+        : [
+            ...(release.probeState === 'degraded' || release.probeState === 'stale' || release.probeState === 'unknown'
+              ? [`Refresh staging healthchecks with ${aliases.doctor} probe.`]
+              : []),
+            ...gateIssues.map(issueLine),
+            'Open the branch card for lane-level reasons before promoting anything to production.',
+          ];
+
+      return {
+        kicker: 'Safety rollup',
+        heading: `Release Gate: ${release.state || 'unknown'}`,
+        summary: 'This is the production-readiness gate. It is a summary of config, observed staging deploys, staging probes, smoke coverage, and release-mode override state.',
+        rows: [
+          ['Meaning', releaseGateMeaning(release.state)],
+          ['Mode', boardContext?.mode || 'unknown'],
+          ['Requested surfaces', listLabel(release.requestedSurfaces, 'none')],
+          ['Blocked surfaces', listLabel(release.blockedSurfaces, 'none')],
+          ['Probe rollup', release.probeState || 'unknown'],
+          ['Local config ready', boolLabel(release.localReady)],
+          ['Hosted signals ready', boolLabel(release.hostedReady)],
+          ['Override', release.effectiveOverride?.reason || 'none active'],
+          ['Freshness', freshnessLabel(release.freshness)],
+        ],
+        sections: [
+          {
+            title: 'Current reason',
+            items: uniqueLines([release.reason, release.message]),
+          },
+          {
+            title: 'Signals behind this pill',
+            items: releaseSources.length
+              ? releaseSources.map(sourceHealthLine)
+              : ['No staging probe or smoke source-health rows are present in the snapshot.'],
+          },
+          {
+            title: 'What to do next',
+            items: uniqueLines(next),
+          },
+        ],
+      };
+    }
+
+    function buildStagingTooltip(boardContext, release, smokeState, sourceHealth, attention) {
+      const aliases = currentHelpAliases();
+      const record = smokeState?.staging;
+      const lock = (smokeState?.locks || []).find((entry) => entry.environment === 'staging');
+      const stagingSources = [
+        ...sourceHealthByPrefix(sourceHealth, ['deployProbe.']),
+        ...sourceHealthByName(sourceHealth, ['smoke.staging', 'smoke.coverage']),
+      ];
+      const stagingIssues = (attention || []).filter((item) => item.lane === 'staging');
+      const next = [
+        lock ? 'A staging smoke operation is already running; wait for it to finish before judging this pill.' : '',
+        !record ? `No staging smoke history is recorded yet. After staging deploy, run ${aliases.smoke} staging.` : '',
+        release.probeState !== 'healthy' ? `Probe state is ${release.probeState || 'unknown'}; run ${aliases.doctor} probe to refresh staging healthchecks.` : '',
+        ...stagingIssues.map(issueLine),
+        `Staging deploy actions use ${aliases.deploy} staging; this should deploy the merged SHA before production.`,
+      ];
+
+      return {
+        kicker: 'Pre-production',
+        heading: `Staging: ${textOrDash(lock ? 'running' : record?.status || 'no smoke history')}`,
+        summary: 'Staging is the environment Pipelane uses to prove the merged SHA works before production. This pill combines staging smoke history with staging probe health.',
+        rows: [
+          ['Smoke status', lock ? `running · ${lock.operation || 'operation'} ${lock.runId || ''}`.trim() : smokeSummary(record, 'staging')],
+          ['Smoke SHA', shortSha(record?.sha)],
+          ['Smoke URL', record?.baseUrl || '—'],
+          ['Smoke finished', record?.finishedAt ? formatDateWithRelative(record.finishedAt) : '—'],
+          ['Probe rollup', release.probeState || 'unknown'],
+          ['Blocked surfaces', listLabel(release.blockedSurfaces, 'none')],
+          ['Mode', boardContext?.mode || 'unknown'],
+        ],
+        sections: [
+          {
+            title: 'Signals behind this pill',
+            items: stagingSources.length
+              ? stagingSources.map(sourceHealthLine)
+              : ['No staging source-health rows are present in the snapshot.'],
+          },
+          {
+            title: 'What to do next',
+            items: uniqueLines(next),
+          },
+        ],
+      };
+    }
+
+    function buildProdTooltip(boardContext, smokeState, sourceHealth) {
+      const aliases = currentHelpAliases();
+      const record = smokeState?.prod;
+      const lock = (smokeState?.locks || []).find((entry) => entry.environment === 'prod');
+      const checkout = boardContext?.currentCheckout || {};
+      const deployLayer = checkout.layers?.deploy || {};
+      const runtimeLayer = checkout.layers?.runtime || {};
+      const prodSources = sourceHealthByName(sourceHealth, ['smoke.prod', 'runtime.frontend.production']);
+      const next = [
+        lock ? 'A production smoke operation is already running; wait for it to finish before judging this pill.' : '',
+        !record ? `No production smoke history is recorded yet. After a production deploy, run ${aliases.smoke} prod.` : '',
+        `Production deploy actions use ${aliases.deploy} prod, require confirmation, and should only promote a SHA that already passed staging.`,
+        checkout.relationships?.runtimeToDeploy?.reason,
+        checkout.relationships?.runtimeToOrigin?.reason,
+      ];
+
+      return {
+        kicker: 'Live environment',
+        heading: `Prod: ${textOrDash(lock ? 'running' : record?.status || 'no smoke history')}`,
+        summary: 'Prod is the live environment. The pill reflects production smoke history; the details also show the latest recorded production deploy and runtime marker when available.',
+        rows: [
+          ['Smoke status', lock ? `running · ${lock.operation || 'operation'} ${lock.runId || ''}`.trim() : smokeSummary(record, 'prod')],
+          ['Smoke SHA', shortSha(record?.sha)],
+          ['Smoke URL', record?.baseUrl || '—'],
+          ['Smoke finished', record?.finishedAt ? formatDateWithRelative(record.finishedAt) : '—'],
+          ['Recorded deploy', `${deployLayer.health || 'unknown'} · ${deployLayer.reason || 'no deploy layer'}`],
+          ['Deploy SHA', shortSha(deployLayer.sha)],
+          ['Runtime marker', `${runtimeLayer.health || 'unknown'} · ${runtimeLayer.reason || 'no runtime layer'}`],
+          ['Runtime SHA', shortSha(runtimeLayer.sha)],
+        ],
+        sections: [
+          {
+            title: 'Signals behind this pill',
+            items: prodSources.length
+              ? prodSources.map(sourceHealthLine)
+              : ['No production source-health rows are present in the snapshot.'],
+          },
+          {
+            title: 'What to do next',
+            items: uniqueLines(next),
+          },
+        ],
+      };
+    }
+
+    function buildBaseTooltip(boardContext) {
+      const checkout = boardContext?.currentCheckout || {};
+      const originLayer = checkout.layers?.origin || {};
+      const worktreeLayer = checkout.layers?.worktree || {};
+      const relation = checkout.relationships?.worktreeToOrigin || {};
+      return {
+        kicker: 'Merge target',
+        heading: `Base: ${boardContext?.baseBranch || 'main'}`,
+        summary: 'Base is the branch Pipelane treats as the canonical merge target. Branch lanes compare work against this branch, usually origin/main.',
+        rows: [
+          ['Base branch', boardContext?.baseBranch || 'main'],
+          ['Remote base', originLayer.detail || `origin/${boardContext?.baseBranch || 'main'}`],
+          ['Remote SHA', shortSha(originLayer.sha)],
+          ['Remote health', `${originLayer.health || 'unknown'} · ${originLayer.reason || 'no origin detail'}`],
+          ['Current branch', checkout.branchName || '(detached)'],
+          ['Worktree SHA', shortSha(worktreeLayer.sha)],
+          ['Worktree vs base', `${relation.state || 'unknown'} · ${relation.reason || 'no comparison available'}`],
+          ['Freshness', freshnessLabel(originLayer.freshness)],
+        ],
+        sections: [
+          {
+            title: 'How to use it',
+            items: [
+              'If this says main, Pipelane expects task branches to land on main.',
+              'If the worktree is behind or diverged from origin/main, refresh your checkout before relying on local code.',
+              'This pill is informational; deploy buttons live on branch cards, context menus, and action panels.',
+            ],
+          },
+        ],
+      };
+    }
+
+    function buildWorktreeTooltip(boardContext) {
+      const aliases = currentHelpAliases();
+      const activeTask = boardContext?.activeTask;
+      const checkout = boardContext?.currentCheckout || {};
+      const worktreeLayer = checkout.layers?.worktree || {};
+      const relation = checkout.relationships?.worktreeToOrigin || {};
+      const next = activeTask
+        ? [
+            checkout.nextAction ? `Suggested next action from the task lock: ${checkout.nextAction}.` : '',
+            'Use the matching branch card for preflighted PR, merge, deploy, rollback, and cleanup actions.',
+          ]
+        : [
+            `Detached means this checkout is not currently tied to an active Pipelane task lock.`,
+            `Use ${aliases.new} to start a task workspace, ${aliases.resume} to reopen one, or click an existing branch card to inspect it.`,
+          ];
+
+      return {
+        kicker: 'Local checkout',
+        heading: `Worktree: ${activeTask ? activeTask.taskSlug : 'detached'}`,
+        summary: 'A worktree is the local checkout Pipelane associates with one task branch. It lets multiple tasks have isolated branches and files without constantly switching one repo checkout.',
+        rows: [
+          ['Task', activeTask?.taskSlug || 'none active'],
+          ['Branch', activeTask?.branchName || checkout.branchName || '(detached)'],
+          ['Path', activeTask?.worktreePath || 'no active task worktree'],
+          ['Mode', activeTask?.mode || boardContext?.mode || 'unknown'],
+          ['Surfaces', listLabel(activeTask?.surfaces, 'none')],
+          ['Updated', activeTask?.updatedAt ? formatDateWithRelative(activeTask.updatedAt) : '—'],
+          ['Current SHA', shortSha(worktreeLayer.sha)],
+          ['Checkout health', `${worktreeLayer.health || 'unknown'} · ${worktreeLayer.reason || 'no worktree detail'}`],
+          ['Worktree vs base', `${relation.state || 'unknown'} · ${relation.reason || 'no comparison available'}`],
+        ],
+        sections: [
+          {
+            title: 'What to do next',
+            items: uniqueLines(next),
+          },
+        ],
+      };
     }
 
     function renderHeroStatusline(snapshot) {
