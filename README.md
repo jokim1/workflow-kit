@@ -61,8 +61,8 @@ to production and do not need required staging validation for the same SHA.
 ```text
 /status                 See what is already in flight.
 /devmode build          Use the fast lane.
-/new "task name"        Create a clean task worktree and branch.
-/pr                     Run pre-PR checks, commit, push, and open or update the PR.
+/new --task "task name" Create a clean task worktree and branch.
+/pr --title "PR title"  Run pre-PR checks, commit, push, and open or update the PR.
 /merge                  Merge the PR and record the merged SHA.
 /smoke prod             Optional: run production-safe smoke checks if configured.
 /clean                  Clean up finished task state after production is verified.
@@ -79,8 +79,8 @@ merged SHA before production can move.
 ```text
 /status                 See active tasks, deploy state, and release gates.
 /devmode release        Use the protected lane.
-/new "task name"        Create a clean task worktree and branch.
-/pr                     Run pre-PR checks, commit, push, and open or update the PR.
+/new --task "task name" Create a clean task worktree and branch.
+/pr --title "PR title"  Run pre-PR checks, commit, push, and open or update the PR.
 /merge                  Merge the PR and record the merged SHA.
 /deploy staging         Deploy the merged SHA to staging.
 /smoke staging          Run or verify staging smoke checks.
@@ -178,7 +178,7 @@ Bootstrapping Pipelane into a repo adds or manages:
 - `pipelane/CLAUDE.template.md` for machine-local operator config
 - `docs/RELEASE_WORKFLOW.md` for the repo's operator guide
 - Pipelane sections in `README.md`, `CONTRIBUTING.md`, and `AGENTS.md`
-- canonical `npm run pipelane:*` scripts in `package.json`
+- canonical repo-native scripts in `package.json` behind the slash commands
 - local `CLAUDE.md` for each release operator's private deploy config
 - `REPO_GUIDANCE.md`, used by `/fix` to preserve repo-specific rules
 
@@ -226,7 +226,7 @@ For PR, merge, deploy, and release flow:
 - GitHub CLI (`gh`) installed and authenticated
 - an `origin` remote with the base branch pushed
 - deploy workflow config for staging and production
-- `npm run pipelane:release-check` passing before release mode is considered ready
+- release readiness passing before release mode is considered ready
 
 Optional:
 
@@ -258,30 +258,10 @@ User-facing slash commands:
 - `/doctor`: inspect deploy configuration and live probes
 - `/rollback`: roll back the most recent verified-good deploy
 
-Repo-native scripts behind those commands:
-
-```bash
-npm run pipelane:setup
-npm run pipelane:configure
-npm run pipelane:devmode -- build|release
-npm run pipelane:new -- --task "<task-name>"
-npm run pipelane:resume -- --task "<task-name>"
-npm run pipelane:repo-guard
-npm run pipelane:pr -- --title "PR title"
-npm run pipelane:merge
-npm run pipelane:release-check
-npm run pipelane:deploy -- staging|prod
-npm run pipelane:smoke -- plan|staging|prod
-npm run pipelane:clean
-npm run pipelane:status
-npm run pipelane:doctor -- --probe
-npm run pipelane:rollback -- prod
-npm run pipelane:board
-npm run pipelane:update
-```
-
-Slash commands are the normal human/AI interface. The `npm run pipelane:*` scripts
-are the stable repo-native layer underneath them.
+Slash commands are the normal human/AI interface. Repo-native scripts are the
+stable implementation layer underneath them, but workflow guidance should point
+operators at `/status`, `/new`, `/pr`, `/merge`, `/deploy`, `/smoke`, and the
+other slash commands above.
 
 ## Use Pipelane With Gstack
 
@@ -319,7 +299,7 @@ a perfect spec. The AI agent can turn it into an implementation plan.
 ```text
 /status
 /devmode build
-/new "add checkout recovery emails"
+/new --task "add checkout recovery emails"
 ```
 
 Pipelane creates the task workspace. `/status` shows what is already in flight,
@@ -463,7 +443,7 @@ gate before production:
 User: Replace the billing webhook handler.
 /status
 /devmode release
-/new "replace billing webhook handler"
+/new --task "replace billing webhook handler"
 /plan-design-review
 /plan-eng-review
 AI: Implementation returns.

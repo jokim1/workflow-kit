@@ -1367,6 +1367,18 @@ export function resolveWorkflowAliases(
   return next;
 }
 
+export function formatWorkflowCommand(
+  config: Pick<WorkflowConfig, 'aliases'>,
+  command: WorkflowCommand,
+  args: string | string[] = '',
+): string {
+  const aliases = resolveWorkflowAliases(config.aliases);
+  const suffix = Array.isArray(args)
+    ? args.map((entry) => entry.trim()).filter(Boolean).join(' ')
+    : args.trim();
+  return suffix ? `${aliases[command]} ${suffix}` : aliases[command];
+}
+
 export function aliasCommandName(alias: string): string {
   return normalizeWorkflowAlias(alias, alias).slice(1);
 }

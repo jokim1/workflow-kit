@@ -28,7 +28,7 @@ export async function handleReleaseCheck(cwd: string, parsed: ParsedOperatorArgs
 
   const overallReady = readiness.ready && checksReport.ok;
   const message = [
-    buildReleaseCheckMessage(readiness, surfaces),
+    buildReleaseCheckMessage(readiness, surfaces, context.config),
     formatChecksReport(checksReport),
   ].join('\n\n');
 

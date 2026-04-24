@@ -6,6 +6,7 @@ import type { BranchLanes } from '../api/snapshot.ts';
 import type { WorkflowConfig, WorkflowContext } from '../state.ts';
 import {
   DEFAULT_MODE,
+  formatWorkflowCommand,
   loadAllTaskLocks,
   loadTaskLock,
   normalizePath,
@@ -69,7 +70,7 @@ export function inferActiveTaskLock(context: WorkflowContext, explicitTask = '')
     throw new Error(`Multiple task locks match ${branchName} at ${context.repoRoot}. Pass --task explicitly.`);
   }
 
-  throw new Error(`No task lock matches branch ${branchName} at ${context.repoRoot}. Run pipelane:new or pass --task.`);
+  throw new Error(`No task lock matches branch ${branchName} at ${context.repoRoot}. Run ${formatWorkflowCommand(context.config, 'new')} or pass --task.`);
 }
 
 export function ensureTaskLockMatchesCurrent(context: WorkflowContext, lock: TaskLock, requestedMode = ''): void {
@@ -403,14 +404,15 @@ export function resolveDeployTargetForTask(options: {
   explicitSha: string;
   prRecord: PrRecord | null;
   mode: string;
+  config: WorkflowConfig;
 }): { sha: string; ref: string } {
   if (options.mode === 'release') {
     if (options.explicitSha.trim()) {
-      throw new Error('Release mode deploys cannot use --sha. Use the recorded merged SHA from pipelane:merge.');
+      throw new Error(`Release mode deploys cannot use --sha. Use the recorded merged SHA from ${formatWorkflowCommand(options.config, 'merge')}.`);
     }
 
     if (!options.prRecord?.mergedSha) {
-      throw new Error('No merged SHA recorded for this task. Run pipelane:merge first.');
+      throw new Error(`No merged SHA recorded for this task. Run ${formatWorkflowCommand(options.config, 'merge')} first.`);
     }
 
     return {

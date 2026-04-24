@@ -25,6 +25,7 @@ import {
   acquireSmokeEnvironmentLock,
 } from '../smoke-gate.ts';
 import {
+  formatWorkflowCommand,
   loadSmokeRegistry,
   loadSmokeWaivers,
   listSmokeRunRecords,
@@ -137,7 +138,7 @@ async function handleSmokeRun(
     entry.environments?.includes(environment) ?? true,
   );
   if (environmentChecks.length === 0) {
-    throw new Error(`smoke ${environment} blocked: no smoke checks configured for ${environment}. Run pipelane:smoke -- plan.`);
+    throw new Error(`smoke ${environment} blocked: no smoke checks configured for ${environment}. Run ${formatWorkflowCommand(context.config, 'smoke', 'plan')}.`);
   }
   if (
     environment === 'staging'
@@ -553,7 +554,7 @@ function handleSmokeWaiver(cwd: string, parsed: ParsedOperatorArgs): void {
   const tag = parsed.positional[2] ?? '';
   const environment = parsed.positional[3] as SmokeEnvironment | '';
   if ((action !== 'create' && action !== 'extend') || !tag || (environment !== 'staging' && environment !== 'prod')) {
-    throw new Error('Usage: pipelane:smoke waiver <create|extend> <@smoke-tag> <staging|prod> --reason "..."');
+    throw new Error(`Usage: ${formatWorkflowCommand(context.config, 'smoke', 'waiver <create|extend> <@smoke-tag> <staging|prod>')} --reason "..."`);
   }
   if (!parsed.flags.reason.trim()) {
     throw new Error('smoke waiver requires --reason.');
@@ -564,6 +565,7 @@ function handleSmokeWaiver(cwd: string, parsed: ParsedOperatorArgs): void {
     tag,
     environment,
     action: 'waiver',
+    planCommand: formatWorkflowCommand(context.config, 'smoke', 'plan'),
   });
   const smokeConfig = resolveSmokeConfig(context.config);
   const waivers = loadSmokeWaivers(context.repoRoot, context.config);
@@ -600,10 +602,15 @@ function handleSmokeQuarantine(cwd: string, parsed: ParsedOperatorArgs, quaranti
   const context = resolveWorkflowContext(cwd);
   const tag = parsed.positional[1] ?? '';
   if (!tag) {
-    throw new Error(`Usage: pipelane:smoke ${quarantine ? 'quarantine' : 'unquarantine'} <@smoke-tag> [--reason "..."]`);
+    throw new Error(`Usage: ${formatWorkflowCommand(context.config, 'smoke', `${quarantine ? 'quarantine' : 'unquarantine'} <@smoke-tag>`)} [--reason "..."]`);
   }
   const registry = loadSmokeRegistry(context.repoRoot, context.config);
-  const entry = requireSmokeRegistryEntry({ registry, tag, action: 'quarantine' });
+  const entry = requireSmokeRegistryEntry({
+    registry,
+    tag,
+    action: 'quarantine',
+    planCommand: formatWorkflowCommand(context.config, 'smoke', 'plan'),
+  });
   registry.checks[tag] = {
     ...entry,
     quarantine,
@@ -624,10 +631,11 @@ function requireSmokeRegistryEntry(options: {
   tag: string;
   environment?: SmokeEnvironment;
   action: 'waiver' | 'quarantine';
+  planCommand: string;
 }) {
   const entry = options.registry.checks[options.tag];
   if (!entry) {
-    throw new Error(`No smoke registry entry found for ${options.tag}. Run pipelane:smoke -- plan first.`);
+    throw new Error(`No smoke registry entry found for ${options.tag}. Run ${options.planCommand} first.`);
   }
   if (
     options.environment

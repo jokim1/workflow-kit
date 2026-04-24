@@ -30,8 +30,8 @@ Fast path. Merge hands off to production deploy.
 
   {{ALIAS_STATUS}}               See what is already in flight.
   {{ALIAS_DEVMODE}} build        Set the repo to build mode. Usually set once, until you switch lanes.
-  {{ALIAS_NEW}} "task name"      Create a clean task worktree and branch. The task name is optional.
-  {{ALIAS_PR}}                   Run pre-PR checks, commit, push, and open or update the PR.
+  {{ALIAS_NEW}} --task "task name" Create a clean task worktree and branch. The task name is optional.
+  {{ALIAS_PR}} --title "PR title"  Run pre-PR checks, commit, push, and open or update the PR.
   {{ALIAS_MERGE}}                Merge the PR. In build mode, this hands off to the prod deploy path.
   {{ALIAS_SMOKE}} prod           Optional: run production-safe smoke checks if configured.
   {{ALIAS_CLEAN}}                Clean up finished task state after the release is complete.
@@ -41,8 +41,8 @@ Protected path. Promote the same merged SHA through staging, smoke, then prod.
 
   {{ALIAS_STATUS}}               See active tasks, deploy state, and release gates.
   {{ALIAS_DEVMODE}} release      Set the repo to release mode. Usually set once, until you switch lanes.
-  {{ALIAS_NEW}} "task name"      Create a clean task worktree and branch. The task name is optional.
-  {{ALIAS_PR}}                   Run pre-PR checks, commit, push, and open or update the PR.
+  {{ALIAS_NEW}} --task "task name" Create a clean task worktree and branch. The task name is optional.
+  {{ALIAS_PR}} --title "PR title"  Run pre-PR checks, commit, push, and open or update the PR.
   {{ALIAS_MERGE}}                Merge the PR and record the merged SHA.
   {{ALIAS_DEPLOY}} staging       Deploy the merged SHA to staging.
   {{ALIAS_SMOKE}} staging        Run or verify staging smoke checks.
@@ -138,7 +138,7 @@ This command:
 2. Fetches the latest `main` commit from `github:jokim1/pipelane` via `git ls-remote`.
 3. If behind, summarizes the commits between (via `gh api repos/jokim1/pipelane/compare`, best effort) and prompts to upgrade.
 4. On confirm, runs `npm install pipelane@github:jokim1/pipelane#main` in the consumer repo.
-5. Runs template-drift detection against the consumer repo. Surfaces the minimum follow-up needed — new/renamed slash commands, scaffold writes, Codex skill changes, other template re-renders — and offers to run `npm run pipelane:setup` inline. Prints reopen-Claude / reopen-Codex hints only when the affected surface actually changed. In `--check` mode this same detection runs without installing, so you can answer "is this consumer in sync?" any time.
+5. Runs template-drift detection against the consumer repo. Surfaces the minimum follow-up needed — new/renamed slash commands, scaffold writes, Codex skill changes, other template re-renders — and offers to run setup inline. Prints reopen-Claude / reopen-Codex hints only when the affected surface actually changed. In `--check` mode this same detection runs without installing, so you can answer "is this consumer in sync?" any time.
 
 Use `--yes` in CI / non-TTY contexts to accept both the upgrade and the inline setup without prompts. Use `--json` for structured output; JSON mode never prompts and includes a `followUpSteps` field describing exactly which surfaces would change.
 

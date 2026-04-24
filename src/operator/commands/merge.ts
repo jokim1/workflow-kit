@@ -1,4 +1,4 @@
-import { printResult, resolveWorkflowContext, runCommandCapture, runGh, runGit, savePrRecord, type ParsedOperatorArgs } from '../state.ts';
+import { formatWorkflowCommand, printResult, resolveWorkflowContext, runCommandCapture, runGh, runGit, savePrRecord, type ParsedOperatorArgs } from '../state.ts';
 import { ensureTaskLockMatchesCurrent, inferActiveTaskLock, loadPrForBranch, pollForMergedSha, setNextAction, watchPrChecks } from './helpers.ts';
 import { dispatchDeploy } from './deploy.ts';
 
@@ -11,7 +11,7 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
   const currentHeadSha = runGit(context.repoRoot, ['rev-parse', '--verify', 'HEAD'], true)?.trim() ?? '';
   const pr = loadPrForBranch(context.repoRoot, branchName);
   if (!pr) {
-    throw new Error(`No pull request found for branch ${branchName}. Run pipelane:pr first.`);
+    throw new Error(`No pull request found for branch ${branchName}. Run ${formatWorkflowCommand(context.config, 'pr')} first.`);
   }
 
   watchPrChecks(context.repoRoot, pr.number);
@@ -75,16 +75,16 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
       lines.push(`Workflow run: ${deploy.workflowRunId}`);
     }
     lines.push('Stay in this task worktree until production verification is clear.');
-    lines.push('Next: verify production, then run pipelane:clean.');
+    lines.push(`Next: verify production, then run ${formatWorkflowCommand(context.config, 'clean')}.`);
   } else if (context.modeState.mode === 'build') {
-    setNextAction(context.commonDir, context.config, taskSlug, `merged at ${shortSha}, deploy to prod`);
+    setNextAction(context.commonDir, context.config, taskSlug, `merged at ${shortSha}, run ${formatWorkflowCommand(context.config, 'deploy', 'prod')}`);
     lines.push('Build mode auto-deploy is disabled for this repo.');
     lines.push('Stay in this task worktree and dispatch production from here.');
-    lines.push('Next: run pipelane:deploy -- prod.');
+    lines.push(`Next: run ${formatWorkflowCommand(context.config, 'deploy', 'prod')}.`);
   } else {
-    setNextAction(context.commonDir, context.config, taskSlug, `merged at ${shortSha}, deploy to staging`);
+    setNextAction(context.commonDir, context.config, taskSlug, `merged at ${shortSha}, run ${formatWorkflowCommand(context.config, 'deploy', 'staging')}`);
     lines.push('Stay in this task worktree and deploy staging from here.');
-    lines.push('Next: run pipelane:deploy -- staging.');
+    lines.push(`Next: run ${formatWorkflowCommand(context.config, 'deploy', 'staging')}.`);
   }
 
   printResult(parsed.flags, {

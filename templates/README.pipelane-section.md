@@ -23,8 +23,8 @@ to production and do not need required staging validation for the same SHA.
 ```text
 {{ALIAS_STATUS}}                 See what is already in flight.
 {{ALIAS_DEVMODE}} build          Use the fast lane.
-{{ALIAS_NEW}} "task name"        Create a clean task worktree and branch.
-{{ALIAS_PR}}                     Run pre-PR checks, commit, push, and open or update the PR.
+{{ALIAS_NEW}} --task "task name" Create a clean task worktree and branch.
+{{ALIAS_PR}} --title "PR title"  Run pre-PR checks, commit, push, and open or update the PR.
 {{ALIAS_MERGE}}                  Merge the PR and record the merged SHA.
 {{ALIAS_SMOKE}} prod             Optional: run production-safe smoke checks if configured.
 {{ALIAS_CLEAN}}                  Clean up finished task state after production is verified.
@@ -38,8 +38,8 @@ same merged SHA before production can move.
 ```text
 {{ALIAS_STATUS}}                 See active tasks, deploy state, and release gates.
 {{ALIAS_DEVMODE}} release        Use the protected lane.
-{{ALIAS_NEW}} "task name"        Create a clean task worktree and branch.
-{{ALIAS_PR}}                     Run pre-PR checks, commit, push, and open or update the PR.
+{{ALIAS_NEW}} --task "task name" Create a clean task worktree and branch.
+{{ALIAS_PR}} --title "PR title"  Run pre-PR checks, commit, push, and open or update the PR.
 {{ALIAS_MERGE}}                  Merge the PR and record the merged SHA.
 {{ALIAS_DEPLOY}} staging         Deploy the merged SHA to staging.
 {{ALIAS_SMOKE}} staging          Run or verify staging smoke checks.
@@ -77,33 +77,16 @@ same merged SHA before production can move.
 - `{{ALIAS_DOCTOR}}`: diagnose deploy config and live probes
 - `{{ALIAS_ROLLBACK}}`: roll back to the last verified-good deploy
 
-### Repo-Native Layer
+### Slash Aliases
 
-Slash commands are the normal Claude/Codex interface. Under the hood, they call
-repo-native scripts:
-
-```bash
-npm run pipelane:setup
-npm run pipelane:devmode -- build|release
-npm run pipelane:new -- --task "<task-name>"
-npm run pipelane:resume -- --task "<task-name>"
-npm run pipelane:pr -- --title "PR title"
-npm run pipelane:merge
-npm run pipelane:release-check
-npm run pipelane:task-lock -- verify --task "<task-name>"
-npm run pipelane:deploy -- staging|prod
-npm run pipelane:smoke -- plan|staging|prod
-npm run pipelane:clean
-npm run pipelane:status
-npm run pipelane:doctor -- --probe
-npm run pipelane:board
-npm run pipelane:update
-```
+Slash commands are the normal Claude/Codex interface. Repo-native scripts exist
+under the hood, but workflow guidance should point operators at the slash
+aliases above.
 
 The default alias set can be changed in `.pipelane.json`. If aliases change,
-rerun `npm run pipelane:setup` and reopen Claude/Codex so the new names are
-picked up. Aliases must be unique, and setup fails closed if an alias would
-overwrite an unrelated command.
+rerun setup and reopen Claude/Codex so the new names are picked up. Aliases
+must be unique, and setup fails closed if an alias would overwrite an unrelated
+command.
 
 ### What Each User Still Needs To Do
 
@@ -115,7 +98,7 @@ overwrite an unrelated command.
 - Each Codex user can run `pipelane install-codex` once per machine for the
   global `/init-pipelane` bootstrap command, then pulls the repo and reopens
   Codex if tracked skills or aliases changed.
-- Each release operator fills local deploy config in `CLAUDE.md` and verifies
-  readiness with `npm run pipelane:release-check`.
+- Each release operator fills local deploy config in `CLAUDE.md`, refreshes probes
+  with `{{ALIAS_DOCTOR}} --probe`, and verifies readiness with `{{ALIAS_DEVMODE}} release`.
 
 Use [docs/RELEASE_WORKFLOW.md](./docs/RELEASE_WORKFLOW.md) for the full operator workflow.

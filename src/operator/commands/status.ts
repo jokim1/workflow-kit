@@ -146,13 +146,14 @@ export function renderCockpit(
   // is nudged through attention[] rows (when stale/degraded surfaces exist)
   // or by the release gate's own "run /doctor --probe" message.
   const probeState = boardContext.releaseReadiness?.probeState;
+  const doctorProbeCommand = `${boardContext.aliases?.doctor ?? '/doctor'} --probe`;
   if (probeState === 'degraded') {
     lines.push(colorize('⚠ DEPLOY PROBE DEGRADED', color, 'red'));
-    lines.push('  run `pipelane:doctor --probe` to re-probe staging surfaces.');
+    lines.push(`  run \`${doctorProbeCommand}\` to re-probe staging surfaces.`);
     lines.push('');
   } else if (probeState === 'stale') {
     lines.push(colorize('ℹ DEPLOY PROBE STALE', color, 'yellow'));
-    lines.push('  last probe is >24h old. Run `pipelane:doctor --probe` to refresh.');
+    lines.push(`  last probe is >24h old. Run \`${doctorProbeCommand}\` to refresh.`);
     lines.push('');
   }
 

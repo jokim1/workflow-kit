@@ -13,6 +13,7 @@ import {
   verifyDeployRecord,
 } from '../release-gate.ts';
 import {
+  formatWorkflowCommand,
   loadDeployState,
   loadSmokeRegistry,
   loadPrRecord,
@@ -150,13 +151,14 @@ function buildDeployConfigurationError(options: {
   environment: 'staging' | 'prod';
   surfaces: string[];
   missing: string[];
+  deployCommand: string;
 }): string {
   return [
     `Deploy blocked: ${options.environment}`,
     `Requested surfaces: ${options.surfaces.join(', ')}`,
     'Missing deploy configuration:',
     ...options.missing.map((entry) => `- ${entry}`),
-    'Fix the Deploy Configuration block in CLAUDE.md before running pipelane:deploy again.',
+    `Fix the Deploy Configuration block in CLAUDE.md before running ${options.deployCommand} again.`,
   ].join('\n');
 }
 
@@ -196,7 +198,12 @@ export async function dispatchDeploy(
     defaultWorkflowName: context.config.deployWorkflowName,
   }).filter((entry) => !allowHealthcheckStubBypass || !entry.endsWith('health check'));
   if (missingConfig.length > 0) {
-    throw new Error(buildDeployConfigurationError({ environment, surfaces, missing: missingConfig }));
+    throw new Error(buildDeployConfigurationError({
+      environment,
+      surfaces,
+      missing: missingConfig,
+      deployCommand: formatWorkflowCommand(context.config, 'deploy'),
+    }));
   }
   const prRecord = loadPrRecord(context.commonDir, context.config, taskSlug);
   const target = resolveDeployTargetForTask({
@@ -205,6 +212,7 @@ export async function dispatchDeploy(
     explicitSha: parsed.flags.sha,
     prRecord,
     mode: context.modeState.mode,
+    config: context.config,
   });
   const asyncRequested = options.async ?? parsed.flags.async;
   const smokeConfig = resolveSmokeConfig(context.config);
@@ -214,7 +222,7 @@ export async function dispatchDeploy(
   if (parsed.flags.skipSmokeCoverage && !requestedSmokeCoverageOverrideReason) {
     throw new Error([
       'Smoke coverage override requires --reason.',
-      'Example: pipelane:deploy -- prod --skip-smoke-coverage --reason "critical hotfix while smoke coverage catches up"',
+      `Example: ${formatWorkflowCommand(context.config, 'deploy', 'prod')} --skip-smoke-coverage --reason "critical hotfix while smoke coverage catches up"`,
     ].join('\n'));
   }
 
@@ -242,7 +250,7 @@ export async function dispatchDeploy(
       surfaces,
     });
     if (!readiness.ready && !context.modeState.override) {
-      throw new Error(buildReleaseCheckMessage(readiness, surfaces));
+      throw new Error(buildReleaseCheckMessage(readiness, surfaces, context.config));
     }
   }
 
@@ -261,7 +269,7 @@ export async function dispatchDeploy(
       throw new Error([
         `deploy prod blocked: no succeeded staging deploy found for SHA ${target.sha.slice(0, 7)}`,
         `with surfaces ${surfaces.join(',')} and task ${taskSlug}.`,
-        'Run pipelane:deploy -- staging first, wait for it to report status=succeeded.',
+        `Run ${formatWorkflowCommand(context.config, 'deploy', 'staging')} first, wait for it to report status=succeeded.`,
       ].join('\n'));
     }
     // v1.2: tighten the prod gate with the same per-surface + fingerprint +
@@ -277,7 +285,7 @@ export async function dispatchDeploy(
     if (disqualification) {
       throw new Error([
         `deploy prod blocked: matching staging record is not promotable — ${disqualification}.`,
-        'Re-run pipelane:deploy -- staging and let it verify before promoting.',
+        `Re-run ${formatWorkflowCommand(context.config, 'deploy', 'staging')} and let it verify before promoting.`,
       ].join('\n'));
     }
 
@@ -298,12 +306,12 @@ export async function dispatchDeploy(
         if (latestSmoke && !isSmokeSuccessStatus(latestSmoke.status)) {
           throw new Error([
             `deploy prod blocked: staging smoke failed for SHA ${target.sha.slice(0, 7)}.`,
-            'Run pipelane:smoke -- staging after fixing the failing smoke checks.',
+            `Run ${formatWorkflowCommand(context.config, 'smoke', 'staging')} after fixing the failing smoke checks.`,
           ].join('\n'));
         }
         throw new Error([
           `deploy prod blocked: no qualifying staging smoke found for SHA ${target.sha.slice(0, 7)}.`,
-          'Run pipelane:smoke -- staging.',
+          `Run ${formatWorkflowCommand(context.config, 'smoke', 'staging')}.`,
         ].join('\n'));
       }
 
@@ -318,7 +326,7 @@ export async function dispatchDeploy(
           if (!requestedSmokeCoverageOverrideReason) {
             throw new Error([
               `deploy prod blocked: ${coverageMessage}.`,
-              'Run pipelane:smoke -- plan or add smoke coverage before promoting.',
+              `Run ${formatWorkflowCommand(context.config, 'smoke', 'plan')} or add smoke coverage before promoting.`,
               'If you must ship anyway, re-run with `--skip-smoke-coverage --reason "<why>"`.',
             ].join('\n'));
           }
@@ -559,8 +567,8 @@ export async function dispatchDeploy(
 
   const shortSha = target.sha.slice(0, 7);
   const nextStage = environment === 'staging'
-    ? `staging verified at ${shortSha}, deploy to prod`
-    : `prod verified at ${shortSha}, run pipelane:clean`;
+    ? `staging verified at ${shortSha}, run ${formatWorkflowCommand(context.config, 'smoke', 'staging')}, then ${formatWorkflowCommand(context.config, 'deploy', 'prod')}`
+    : `prod verified at ${shortSha}, run ${formatWorkflowCommand(context.config, 'clean')}`;
   setNextAction(context.commonDir, context.config, taskSlug, nextStage);
 
     return {
@@ -578,8 +586,8 @@ export async function dispatchDeploy(
           ? `Healthcheck: ${verification.healthcheckUrl} → HTTP ${verification.statusCode} in ${verification.latencyMs}ms (${verification.probes} probe(s))`
           : 'Healthcheck: skipped (no URL configured)',
         environment === 'staging'
-          ? 'Next: run pipelane:deploy -- prod.'
-          : 'Next: run pipelane:clean.',
+          ? `You should \`${formatWorkflowCommand(context.config, 'smoke', 'staging')}\` next; once you finish testing staging, run \`${formatWorkflowCommand(context.config, 'deploy', 'prod')}\`.`
+          : `Next: run ${formatWorkflowCommand(context.config, 'clean')}.`,
       ].filter(Boolean).join('\n'),
     };
   } finally {

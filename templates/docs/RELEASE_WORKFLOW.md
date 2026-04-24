@@ -15,33 +15,13 @@ follow safely without improvising repo behavior.
 
 `{{DISPLAY_NAME}}` uses `pipelane` as its shared release-management and task-workspace layer.
 
-- repo-native scripts are the source of truth
-- slash wrappers are thin adapters only
+- slash aliases are the operator-facing command surface
+- repo-native scripts are implementation plumbing behind those aliases
 - `{{ALIAS_NEW}}` is the canonical task-start command
 - `{{ALIAS_RESUME}}` is the recovery command
 - `repo-guard` is internal-only
 
 ## Supported Operator Surfaces
-
-### Repo-native CLI Surface
-
-- `npm run pipelane:setup`
-- `npm run pipelane:devmode -- ...`
-- `npm run pipelane:new -- --task "<task-name>"`
-- `npm run pipelane:resume -- --task "<task-name>"`
-- `npm run pipelane:pr -- ...`
-- `npm run pipelane:merge`
-- `npm run pipelane:release-check`
-- `npm run pipelane:task-lock -- verify --task "<task-name>"`
-- `npm run pipelane:deploy -- staging|prod ...`
-- `npm run pipelane:smoke -- plan|staging|prod`
-- `npm run pipelane:clean`
-- `npm run pipelane:status`
-- `npm run pipelane:doctor` (add `-- --probe` for staging healthchecks, `-- --fix` for the guided wizard)
-- `npm run pipelane:board`
-- `npm run pipelane:update`
-
-### AI-client Slash Surface
 
 This repo exposes the following user-facing slash commands through Claude/Codex adapters:
 
@@ -59,7 +39,7 @@ This repo exposes the following user-facing slash commands through Claude/Codex 
 - `{{ALIAS_DOCTOR}}`
 - `{{ALIAS_ROLLBACK}}`
 
-If aliases change in `.pipelane.json`, rerun `npm run pipelane:setup` and reopen Claude/Codex so the new command names are picked up.
+If aliases change in `.pipelane.json`, rerun setup and reopen Claude/Codex so the new command names are picked up.
 Aliases must be unique, and setup fails closed if an alias would overwrite an unrelated command or skill.
 Codex resolves aliases per repo at runtime, so the same alias name can map to different workflow commands in different pipelane repos on one machine.
 
@@ -135,14 +115,14 @@ Chat has not moved. Switch this chat/workspace to that path before editing.
 
 Normal use:
 
-```bash
-npm run pipelane:resume -- --task "My Task"
+```text
+{{ALIAS_RESUME}} --task "My Task"
 ```
 
 Fallback listing:
 
-```bash
-npm run pipelane:resume
+```text
+{{ALIAS_RESUME}}
 ```
 
 ## Build vs Release user journeys
@@ -160,18 +140,10 @@ Use it when:
 User-facing journey:
 
 1. `{{ALIAS_DEVMODE}} build`
-2. `{{ALIAS_NEW}} <task-name>`
-3. `{{ALIAS_PR}}`
+2. `{{ALIAS_NEW}} --task "<task-name>"`
+3. `{{ALIAS_PR}} --title "<pr title>"`
 4. `{{ALIAS_MERGE}}`
 5. `{{ALIAS_CLEAN}}`
-
-Repo-native journey:
-
-1. `npm run pipelane:devmode -- build`
-2. `npm run pipelane:new -- --task "<task-name>"`
-3. `npm run pipelane:pr -- --title "<pr title>"`
-4. `npm run pipelane:merge`
-5. `npm run pipelane:clean`
 
 ### Release mode user journey
 
@@ -186,22 +158,13 @@ Use it when:
 User-facing journey:
 
 1. `{{ALIAS_DEVMODE}} release`
-2. `{{ALIAS_NEW}} <task-name>`
-3. `{{ALIAS_PR}}`
+2. `{{ALIAS_NEW}} --task "<task-name>"`
+3. `{{ALIAS_PR}} --title "<pr title>"`
 4. `{{ALIAS_MERGE}}`
 5. `{{ALIAS_DEPLOY}} staging`
-6. `{{ALIAS_DEPLOY}} prod`
-7. `{{ALIAS_CLEAN}}`
-
-Repo-native journey:
-
-1. `npm run pipelane:devmode -- release`
-2. `npm run pipelane:new -- --task "<task-name>"`
-3. `npm run pipelane:pr -- --title "<pr title>"`
-4. `npm run pipelane:merge`
-5. `npm run pipelane:deploy -- staging`
-6. `npm run pipelane:deploy -- prod`
-7. `npm run pipelane:clean`
+6. `{{ALIAS_SMOKE}} staging`
+7. `{{ALIAS_DEPLOY}} prod`
+8. `{{ALIAS_CLEAN}}`
 
 ## Build Mode
 
@@ -224,7 +187,7 @@ The gate reads local `CLAUDE.md` and validates the configured surfaces:
 
 - `{{SURFACES_CSV}}`
 - the latest `/doctor --probe` result for each configured surface must be green and fresh
-- cached probe results are tied to the exact configured `healthcheckUrl`, so any staging URL or healthcheck-path change requires rerunning `npm run pipelane:doctor -- --probe`
+- cached probe results are tied to the exact configured `healthcheckUrl`, so any staging URL or healthcheck-path change requires rerunning `{{ALIAS_DOCTOR}} --probe`
 - if `PIPELANE_PROBE_STATE_KEY` is set, only signed probe records count toward release readiness
 
 ## Environment and Surface Names
@@ -241,7 +204,7 @@ Surfaces:
 
 ## Cleanup
 
-`pipelane:clean` is report-first. Use `--apply` only when you want to prune stale task locks.
+`{{ALIAS_CLEAN}}` is report-first. Use `--apply` only when you want to prune stale task locks.
 
 ## Supporting Files
 
@@ -309,7 +272,7 @@ This repo tracks `AGENTS.md` as the repo policy surface for pipelane.
 
 ## Required local `CLAUDE.md`
 
-`CLAUDE.md` is machine-local and git-ignored. `npm run pipelane:setup` creates it if missing.
+`CLAUDE.md` is machine-local and git-ignored. Setup creates it if missing.
 
 ## What each user must do
 
@@ -330,15 +293,16 @@ This repo tracks `AGENTS.md` as the repo policy surface for pipelane.
 
 1. optional once per machine: run `pipelane install-codex` for the global `/init-pipelane` bootstrap command
 2. pull the committed workflow files
-3. if this machine previously used pipelane's machine-local Codex wrappers, run `npm run pipelane:setup` once to prune them
+3. if this machine previously used pipelane's machine-local Codex wrappers, rerun setup once to prune them
 4. open the repo in Codex
 5. reopen or restart Codex if tracked skills or aliases changed while it was already open
 
 ### Each release operator
 
-1. run `npm run pipelane:setup`
+1. run setup
 2. fill local deploy config in `CLAUDE.md`
-3. verify with `npm run pipelane:release-check`
+3. run `{{ALIAS_DOCTOR}} --probe`
+4. verify with `{{ALIAS_DEVMODE}} release`
 
 ## Install In A New Repo
 
@@ -349,24 +313,24 @@ pipelane bootstrap --project "{{DISPLAY_NAME}}"
 ```
 
 For first-time adoption in an existing remote-backed repo, commit the tracked Pipelane files
-before using `pipelane:new`. New task worktrees are created from `{{BASE_BRANCH}}`, so the
+before using `{{ALIAS_NEW}}`. New task worktrees are created from `{{BASE_BRANCH}}`, so the
 workflow contract needs to exist there first.
 
 ## Day-One Operator Journey
 
-1. `npm run pipelane:setup`
-2. `npm run pipelane:devmode -- status`
-3. `npm run pipelane:new -- --task "<task-name>"`
+1. Run setup
+2. `{{ALIAS_DEVMODE}} status`
+3. `{{ALIAS_NEW}} --task "<task-name>"`
 4. implement and verify
-5. `npm run pipelane:pr -- --title "<pr title>"`
+5. `{{ALIAS_PR}} --title "<pr title>"`
 
 ## Troubleshooting and Common Failures
 
 - missing `.pipelane.json`
   - run `pipelane bootstrap --project "{{DISPLAY_NAME}}"` or `pipelane init`
 - task already active
-  - use `pipelane:resume -- --task "<task-name>"`
+  - use `{{ALIAS_RESUME}} --task "<task-name>"`
 - release mode blocked
   - complete local `CLAUDE.md`
-  - rerun `npm run pipelane:doctor -- --probe` after any staging URL or healthcheck-path change because cached probe results are URL-bound
+  - rerun `{{ALIAS_DOCTOR}} --probe` after any staging URL or healthcheck-path change because cached probe results are URL-bound
   - if probe-state signing is enabled, make sure `PIPELANE_PROBE_STATE_KEY` is set on the machine running the probe and then rerun it

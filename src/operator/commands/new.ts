@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 
 import {
+  formatWorkflowCommand,
   loadTaskLock,
   printResult,
   resolveWorkflowContext,
@@ -68,7 +69,7 @@ export async function handleNew(cwd: string, parsed: ParsedOperatorArgs): Promis
       `Slug: ${taskSlug}`,
       `Branch: ${existingLock.branchName}`,
       `Worktree: ${existingLock.worktreePath}`,
-      `Next: run pipelane:resume -- --task "${taskName}"`,
+      `Next: run ${formatWorkflowCommand(context.config, 'resume')} --task "${taskName}"`,
     ].join('\n'));
   }
 

@@ -14,7 +14,7 @@ This command:
 3. Squash-merges the PR.
 4. Records the merged SHA for later deploy flow.
 
-Display the output directly. Report the merged SHA and the next step.
+Display the output directly. Report the merged SHA and the next step using slash commands only.
 
 <!-- pipelane:consumer-extension:start -->
 <!-- pipelane:consumer-extension:end -->

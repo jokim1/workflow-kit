@@ -9,8 +9,8 @@ npm run pipelane:new -- $ARGUMENTS
 
 Expected form (with a task label):
 
-```bash
-npm run pipelane:new -- --task "task name"
+```text
+{{ALIAS_NEW}} --task "task name"
 ```
 
 The task label is optional. You can also run `/new` with no arguments and a

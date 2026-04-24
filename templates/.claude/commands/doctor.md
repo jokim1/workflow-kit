@@ -3,17 +3,17 @@ Diagnose deploy configuration, run live probes, or launch the fix wizard.
 
 Three modes:
 
-```bash
+```text
 # Read CLAUDE.md, list missing deploy fields, detect platform.
-npm run pipelane:doctor
+{{ALIAS_DOCTOR}}
 
 # Hit each configured staging/production healthcheck URL and record
 # liveness to probe-state.json. Required for release-mode readiness.
-npm run pipelane:doctor -- --probe
+{{ALIAS_DOCTOR}} --probe
 
 # Interactive wizard: asks platform + URLs, writes the Deploy
 # Configuration block in CLAUDE.md, then auto-runs --probe.
-npm run pipelane:doctor -- --fix
+{{ALIAS_DOCTOR}} --fix
 ```
 
 Rules:

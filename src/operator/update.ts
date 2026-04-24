@@ -143,7 +143,7 @@ export async function runUpdate(cwd: string, options: UpdateOptions): Promise<Up
   let ranSetup = false;
   const drift = driftResult.drift;
   if (drift?.needsSetup && drift.claude.collisions.length === 0) {
-    const shouldRun = options.yes || (process.stdin.isTTY && (await promptYesNoDefaultYes('Run `npm run pipelane:setup` now? [Y/n] ')));
+    const shouldRun = options.yes || (process.stdin.isTTY && (await promptYesNoDefaultYes('Run setup now? [Y/n] ')));
     if (shouldRun) {
       const setupResult = setupConsumerRepo(repoRoot);
       process.stdout.write('\n' + formatSetupResult(setupResult).join('\n') + '\n');
@@ -236,7 +236,7 @@ export function formatFollowUpSummary(drift: SetupDrift): string {
       'Resolve these manually (rename, remove, or change the alias in .pipelane.json), then rerun `pipelane update`.',
     ].join('\n');
   }
-  lines.push('  1. Run `npm run pipelane:setup` to apply template changes:');
+  lines.push('  1. Run setup to apply template changes:');
   for (const change of changes) {
     lines.push(`     - ${change}`);
   }

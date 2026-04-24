@@ -12,6 +12,7 @@ import {
 import { emptyDeployConfig, evaluateReleaseReadiness, loadDeployConfig } from '../release-gate.ts';
 import {
   loadDeployState,
+  formatWorkflowCommand,
   loadPrRecord,
   loadProbeState,
   printResult,
@@ -41,7 +42,7 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
       surfaces,
     });
     if (!readiness.ready && !context.modeState.override) {
-      throw new Error('Release mode is not ready. Run pipelane:release-check first.');
+      throw new Error(`Release mode is not ready. Run ${formatWorkflowCommand(context.config, 'status')} for blockers, then ${formatWorkflowCommand(context.config, 'devmode', 'release')} after fixing readiness.`);
     }
   }
 
@@ -52,7 +53,7 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
   let prTitle = parsed.flags.title.trim();
 
   if (!existingPr && !prTitle && dirty) {
-    throw new Error('pipelane:pr requires --title for a new PR when the worktree is dirty.');
+    throw new Error(`${formatWorkflowCommand(context.config, 'pr')} requires --title for a new PR when the worktree is dirty.`);
   }
 
   if (!prTitle) {
@@ -144,7 +145,7 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
       `Task: ${taskSlug}`,
       `Branch: ${branchName}`,
       `PR: ${prUrl || 'created'}`,
-      'Next: run pipelane:merge.',
+      `Next: run ${formatWorkflowCommand(context.config, 'merge')}.`,
     ].join('\n'),
   });
 }

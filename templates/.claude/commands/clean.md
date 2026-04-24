@@ -9,10 +9,10 @@ npm run pipelane:clean
 
 To prune stale task locks, scope the prune explicitly:
 
-```bash
-npm run pipelane:clean -- --apply --task "<task name or slug>"
+```text
+{{ALIAS_CLEAN}} --apply --task "<task name or slug>"
 # or, to prune every stale lock in one shot:
-npm run pipelane:clean -- --apply --all-stale
+{{ALIAS_CLEAN}} --apply --all-stale
 ```
 
 Rules:

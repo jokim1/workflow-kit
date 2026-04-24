@@ -3,16 +3,16 @@ Roll back the last staging or production deploy to the most recent verified-good
 
 Two modes:
 
-```bash
+```text
 # Redeploy the last succeeded SHA for the named environment. Dispatches a
 # fresh gh workflow run, probes healthchecks, and records a new
 # DeployRecord with `rollbackOfSha` pointing at the failing SHA.
-npm run pipelane:rollback -- staging
-npm run pipelane:rollback -- prod
+{{ALIAS_ROLLBACK}} staging
+{{ALIAS_ROLLBACK}} prod
 
 # Alternative recovery path: open a `git revert <mergeCommit>` PR via gh
 # pr create. Never pushes to main directly. Release-mode only.
-npm run pipelane:rollback -- prod --revert-pr
+{{ALIAS_ROLLBACK}} prod --revert-pr
 ```
 
 Rules:

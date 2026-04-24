@@ -1,5 +1,5 @@
 import { buildReleaseCheckMessage, emptyDeployConfig, evaluateReleaseReadiness, loadDeployConfig } from '../release-gate.ts';
-import { loadDeployState, loadProbeState, printResult, saveModeState, type ParsedOperatorArgs, type WorkflowContext } from '../state.ts';
+import { formatWorkflowCommand, loadDeployState, loadProbeState, printResult, saveModeState, type ParsedOperatorArgs, type WorkflowContext } from '../state.ts';
 import { resolveWorkflowContext } from '../state.ts';
 import { resolveCommandSurfaces, sanitizeForTerminal } from './helpers.ts';
 
@@ -69,7 +69,7 @@ export async function handleDevmode(cwd: string, parsed: ParsedOperatorArgs): Pr
       printResult(parsed.flags, {
         ready: false,
         blockedSurfaces: readiness.blockedSurfaces,
-        message: buildReleaseCheckMessage(readiness, surfaces),
+        message: buildReleaseCheckMessage(readiness, surfaces, context.config),
       });
       process.exitCode = 1;
       return;
@@ -81,7 +81,7 @@ export async function handleDevmode(cwd: string, parsed: ParsedOperatorArgs): Pr
     if (parsed.flags.override && !parsed.flags.reason.trim()) {
       throw new Error([
         'Release override requires --reason.',
-        'Example: npm run pipelane:devmode -- release --override --reason "shipping hotfix <ticket>"',
+        `Example: ${formatWorkflowCommand(context.config, 'devmode', 'release')} --override --reason "shipping hotfix <ticket>"`,
         'Reasons are persisted to mode-state.json as lastOverride and surfaced by /status.',
       ].join('\n'));
     }

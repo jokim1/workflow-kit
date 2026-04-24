@@ -498,18 +498,18 @@ in `AGENTS.md` where enforcement is social.
 
 ### Operator commands
 
-| Slash | Repo-native | Purpose | Status |
-| --- | --- | --- | --- |
-| `/status` | `npm run pipelane:status` | Cockpit view; tasks + pipeline state | v0 |
-| `/devmode` | `npm run pipelane:devmode -- ...` | Inspect / switch build ↔ release lane | shipped |
-| `/new` | `npm run pipelane:new -- --task "<name>"` | Fresh isolated task workspace | shipped |
-| `/resume` | `npm run pipelane:resume -- --task "<name>"` | Recover an existing workspace | shipped |
-| `/pr` | `npm run pipelane:pr -- --title "<t>"` | Preview + stage + commit + push + open PR | v0-hardened |
-| `/merge` | `npm run pipelane:merge` | Confirm + squash-merge + poll SHA | v0-hardened |
-| `/deploy` | `npm run pipelane:deploy -- staging\ | prod` | Deploy + watch + verify | v0-hardened |
-| `/rollback` | `npm run pipelane:rollback -- staging\ | prod` | Redeploy last-known-good | v1 |
-| `/doctor` | `npm run pipelane:doctor [--fix\ | --probe]` | Diagnose / configure / probe | v1 |
-| `/clean` | `npm run pipelane:clean [--apply]` | Prune stale task locks | shipped + v0-hardened |
+| Slash | Purpose | Status |
+| --- | --- | --- |
+| `/status` | Cockpit view; tasks + pipeline state | v0 |
+| `/devmode` | Inspect / switch build ↔ release lane | shipped |
+| `/new` | Fresh isolated task workspace | shipped |
+| `/resume` | Recover an existing workspace | shipped |
+| `/pr` | Preview + stage + commit + push + open PR | v0-hardened |
+| `/merge` | Confirm + squash-merge + poll SHA | v0-hardened |
+| `/deploy` | Deploy + watch + verify | v0-hardened |
+| `/rollback` | Redeploy last-known-good | v1 |
+| `/doctor` | Diagnose / configure / probe | v1 |
+| `/clean` | Prune stale task locks | shipped + v0-hardened |
 
 ### Setup commands
 
@@ -517,7 +517,7 @@ in `AGENTS.md` where enforcement is social.
 | --- | --- | --- |
 | `pipelane bootstrap --project "<name>"` | Install pipelane into the repo, scaffold tracked files, and run setup | shipped |
 | `npx pipelane init --project "<name>"` | Scaffold tracked files in a repo that already has pipelane installed locally | rename-pending |
-| `npm run pipelane:setup` | Install templates, Claude commands, and tracked Codex skills | rename-pending |
+| setup | Install templates, Claude commands, and tracked Codex skills | rename-pending |
 | `pipelane install-claude` | Install the global Claude `/init-pipelane` bootstrap command on this machine | shipped |
 | `pipelane install-codex` | Install the global Codex `/init-pipelane` bootstrap command on this machine | shipped |
 

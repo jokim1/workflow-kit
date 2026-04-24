@@ -125,7 +125,7 @@ export function collectBootstrapWarnings(repoRoot: string): string[] {
   const origin = runCommandCapture('git', ['remote', 'get-url', 'origin'], { cwd: repoRoot });
   if (!origin.ok) {
     warnings.push(
-      `No \`origin\` remote detected. \`/new\` refreshes \`origin/${baseBranch}\` by default and will fail until that remote exists and the base branch is pushed. If you intentionally want a local-only flow, rerun \`pipelane:new\` with \`--offline\`.`,
+      `No \`origin\` remote detected. \`/new\` refreshes \`origin/${baseBranch}\` by default and will fail until that remote exists and the base branch is pushed. If you intentionally want a local-only flow, rerun \`/new --offline\`.`,
     );
   }
 

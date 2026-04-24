@@ -869,7 +869,7 @@ export function setupDeployConfigMessage(repoRoot: string): string {
   if (loadDeployConfig(repoRoot)) {
     return 'Release mode can use shared deploy configuration when available. Edit local CLAUDE.md only for worktree-local overrides.';
   }
-  return 'Release mode still requires deploy configuration. Run `pipelane doctor --fix` or `pipelane configure`.';
+  return 'Release mode still requires deploy configuration. Run `/doctor --fix`.';
 }
 
 // Canonical setup-complete output. Used by `pipelane setup` (cli.ts) and by

@@ -1001,7 +1001,7 @@ test('release deploy prod blocks when staging smoke for the same SHA is missing'
 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /no qualifying staging smoke found/i);
-    assert.match(result.stderr, /Run pipelane:smoke -- staging/i);
+    assert.match(result.stderr, /Run \/smoke staging/i);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
@@ -1915,8 +1915,8 @@ test('pipelane.md renders a journey-first overview with real slash aliases', () 
     assert.match(pipelane, /Pick a lane:/);
     assert.match(pipelane, /1\. Build journey/);
     assert.match(pipelane, /\/devmode build\s+Set the repo to build mode\./);
-    assert.match(pipelane, /\/start "task name"\s+Create a clean task worktree and branch\./);
-    assert.match(pipelane, /\/pr\s+Run pre-PR checks, commit, push, and open or update the PR\./);
+    assert.match(pipelane, /\/start --task "task name"\s+Create a clean task worktree and branch\./);
+    assert.match(pipelane, /\/pr --title "PR title"\s+Run pre-PR checks, commit, push, and open or update the PR\./);
     assert.match(pipelane, /\/merge\s+Merge the PR\. In build mode, this hands off to the prod deploy path\./);
     assert.match(pipelane, /\/tidy\s+Clean up finished task state after the release is complete\./);
     assert.match(pipelane, /2\. Release journey/);
@@ -3099,7 +3099,7 @@ test('new creates a fresh task workspace and resume restores it', () => {
     const duplicate = runCli(['run', 'new', '--task', 'Primary Task'], repoRoot, {}, true);
     assert.equal(duplicate.status, 1);
     assert.match(duplicate.stderr, /already active/);
-    assert.match(duplicate.stderr, /pipelane:resume/);
+    assert.match(duplicate.stderr, /\/resume/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
@@ -3615,7 +3615,7 @@ test('release-check blocks when CLAUDE config is full but no staging deploy reco
     assert.equal(output.ready, false);
     assert.deepEqual(output.blockedSurfaces.sort(), ['edge', 'frontend', 'sql']);
     assert.match(output.message, /no succeeded deploy observed/);
-    assert.match(output.message, /pipelane:deploy -- staging/);
+    assert.match(output.message, /\/deploy staging/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -3883,7 +3883,7 @@ test('setup output points the operator at doctor or configure when no deploy con
     const result = runCli(['setup'], repoRoot);
     assert.match(
       result.stdout,
-      /Release mode still requires deploy configuration\. Run `pipelane doctor --fix` or `pipelane configure`\./,
+      /Release mode still requires deploy configuration\. Run `\/doctor --fix`\./,
     );
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
@@ -6566,9 +6566,8 @@ test('setup installs the pipelane:configure script and rewrites devmode.md point
     assert.equal(pkg.scripts['pipelane:configure'], 'pipelane configure');
 
     const devmode = readFileSync(path.join(repoRoot, '.claude', 'commands', 'devmode.md'), 'utf8');
-    // The devmode slash command points operators at the scoped
-    // `pipelane:configure` entry that configure.ts wires in.
-    assert.match(devmode, /npm run pipelane:configure/);
+    // The devmode slash command points operators at the guided doctor flow.
+    assert.match(devmode, /\/doctor --fix/);
     assert.doesNotMatch(devmode, /run `npm run pipelane:setup`/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
@@ -7652,7 +7651,7 @@ test('release-check blocks when staging probe is stale (>24h old)', async () => 
     assert.equal(result.status, 1);
     assert.equal(output.ready, false);
     assert.match(output.message, /probe is stale/);
-    assert.match(output.message, /pipelane:doctor --probe/);
+    assert.match(output.message, /\/doctor --probe/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -10083,7 +10082,7 @@ test('formatFollowUpSummary lists new/updated commands and step-numbered reopen 
   };
   const summary = update.formatFollowUpSummary(drift);
   assert.match(summary, /Follow-up needed:/);
-  assert.match(summary, /Run `npm run pipelane:setup`/);
+  assert.match(summary, /Run setup/);
   assert.match(summary, /New slash commands: fix\.md/);
   assert.match(summary, /Updated commands: pr\.md, merge\.md/);
   assert.match(summary, /Updated Codex skills: pr/);
@@ -10121,5 +10120,5 @@ test('formatFollowUpSummary on collisions replaces the run-setup step with a res
   assert.match(summary, /Setup cannot run — collision/);
   assert.match(summary, /\.claude\/commands\/fix\.md/);
   assert.match(summary, /Resolve these manually/);
-  assert.doesNotMatch(summary, /Run `npm run pipelane:setup`/);
+  assert.doesNotMatch(summary, /Run setup/);
 });

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import type { DeployRecord, PrRecord, ProbeState, SmokeEnvironmentLock, SmokeRunRecord, TaskLock, WorkflowConfig } from '../state.ts';
 import {
   DEFAULT_MODE,
+  formatWorkflowCommand,
   loadAllTaskLocks,
   loadDeployState,
   loadSmokeEnvironmentLock,
@@ -130,6 +131,7 @@ export interface SnapshotData {
   boardContext: {
     mode: string;
     baseBranch: string;
+    aliases?: WorkflowConfig['aliases'];
     laneOrder: string[];
     releaseReadiness: {
       state: LaneState;
@@ -347,7 +349,7 @@ export async function buildWorkflowApiSnapshot(cwd: string): Promise<ApiEnvelope
     attention.push(buildApiIssue({
       code: entry.result.state === 'degraded' ? 'probe.degraded' : 'probe.stale',
       severity: entry.result.state === 'degraded' ? 'error' : 'warning',
-      message: `staging ${entry.surface} probe ${entry.result.state}: ${entry.result.reason}. Run \`pipelane:doctor --probe\`.`,
+      message: `staging ${entry.surface} probe ${entry.result.state}: ${entry.result.reason}. Run \`${formatWorkflowCommand(context.config, 'doctor', '--probe')}\`.`,
       source: 'probeState',
       blocking: true,
       lane: 'staging',
@@ -382,7 +384,7 @@ export async function buildWorkflowApiSnapshot(cwd: string): Promise<ApiEnvelope
     attention.push(buildApiIssue({
       code: 'smoke.coverage.missing',
       severity: smokeCoverageBlocking ? 'error' : 'warning',
-      message: `Staging smoke coverage gaps: ${smokeCoverage.uncoveredCriticalPaths.join(', ')}. Run \`pipelane:smoke -- plan\`.`,
+      message: `Staging smoke coverage gaps: ${smokeCoverage.uncoveredCriticalPaths.join(', ')}. Run \`${formatWorkflowCommand(context.config, 'smoke', 'plan')}\`.`,
       source: 'smokeRegistry',
       blocking: smokeCoverageBlocking,
       lane: 'staging',
@@ -416,6 +418,7 @@ export async function buildWorkflowApiSnapshot(cwd: string): Promise<ApiEnvelope
       boardContext: {
         mode,
         baseBranch,
+        aliases: context.config.aliases,
         laneOrder: ['Local', 'PR', `Base: ${baseBranch}`, 'Staging', 'Production'],
         releaseReadiness: buildBoardReleaseReadiness({
           checkedAt,
@@ -490,6 +493,7 @@ function resolveStagingSmokeStatus(options: {
   const latestIssue = buildLatestStagingSmokeIssue({
     latestRecord: options.latestRecord,
     gateBlocking,
+    config: options.config,
   });
 
   if (!gateBlocking || !options.currentPrRecord?.mergedSha) {
@@ -538,7 +542,7 @@ function resolveStagingSmokeStatus(options: {
       issue: buildApiIssue({
         code: 'smoke.staging.target_missing',
         severity: 'error',
-        message: `No qualifying staging smoke found for current promotion SHA ${shortSha(targetSha)}. Run \`pipelane:smoke -- staging\`.`,
+        message: `No qualifying staging smoke found for current promotion SHA ${shortSha(targetSha)}. Run \`${formatWorkflowCommand(options.config, 'smoke', 'staging')}\`.`,
         source: 'smokeLatest',
         blocking: true,
         lane: 'staging',
@@ -556,7 +560,7 @@ function resolveStagingSmokeStatus(options: {
       issue: buildApiIssue({
         code: 'smoke.staging.target_drifted',
         severity: 'error',
-        message: `Latest staging smoke for current promotion SHA ${shortSha(targetSha)} drifted during execution. Re-run \`pipelane:smoke -- staging\`.`,
+        message: `Latest staging smoke for current promotion SHA ${shortSha(targetSha)} drifted during execution. Re-run \`${formatWorkflowCommand(options.config, 'smoke', 'staging')}\`.`,
         source: 'smokeLatest',
         blocking: true,
         lane: 'staging',
@@ -574,7 +578,7 @@ function resolveStagingSmokeStatus(options: {
       issue: buildApiIssue({
         code: 'smoke.staging.target_failed',
         severity: 'error',
-        message: `Latest staging smoke failed for current promotion SHA ${shortSha(targetSha)}. Run \`pipelane:smoke -- staging\` after fixing the failing checks.`,
+        message: `Latest staging smoke failed for current promotion SHA ${shortSha(targetSha)}. Run \`${formatWorkflowCommand(options.config, 'smoke', 'staging')}\` after fixing the failing checks.`,
         source: 'smokeLatest',
         blocking: true,
         lane: 'staging',
@@ -595,12 +599,13 @@ function resolveStagingSmokeStatus(options: {
 function buildLatestStagingSmokeIssue(options: {
   latestRecord: SmokeRunRecord | null;
   gateBlocking: boolean;
+  config: WorkflowConfig;
 }): ApiIssue | null {
   if (!options.latestRecord) {
     return buildApiIssue({
       code: 'smoke.staging.missing',
       severity: options.gateBlocking ? 'error' : 'warning',
-      message: 'No staging smoke history yet. Run `pipelane:smoke -- staging` before promoting.',
+      message: `No staging smoke history yet. Run \`${formatWorkflowCommand(options.config, 'smoke', 'staging')}\` before promoting.`,
       source: 'smokeLatest',
       blocking: options.gateBlocking,
       lane: 'staging',

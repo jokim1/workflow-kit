@@ -9,8 +9,8 @@ npm run pipelane:resume -- $ARGUMENTS
 
 Common forms:
 
-- `npm run pipelane:resume -- --task "task name"`
-- `npm run pipelane:resume`
+- `{{ALIAS_RESUME}} --task "task name"`
+- `{{ALIAS_RESUME}}`
 
 Behavior:
 

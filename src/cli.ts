@@ -83,8 +83,8 @@ async function main(): Promise<void> {
     const lines = [
       `Initialized pipelane in ${result.repoRoot}`,
       `Config: ${result.configPath}`,
-      'Commit the tracked Pipelane files before using pipelane:new from a remote-backed repo.',
-      'Next: run npm run pipelane:setup',
+      'Commit the tracked Pipelane files before using /new from a remote-backed repo.',
+      'Next: run setup, then reopen Claude/Codex so slash commands are loaded.',
       'Tracked Codex skills will be written into .agents/skills for the repo.',
     ];
     const warnings = collectBootstrapWarnings(result.repoRoot);
@@ -106,7 +106,7 @@ async function main(): Promise<void> {
         ? `Initialized tracked Pipelane files for ${result.displayName}.`
         : 'Repo was already pipelane-enabled; refreshed local setup.',
       result.createdClaude ? 'Created local CLAUDE.md from the Pipelane template.' : 'Preserved existing local CLAUDE.md.',
-      'Commit the tracked Pipelane files before using pipelane:new from a remote-backed repo.',
+      'Commit the tracked Pipelane files before using /new from a remote-backed repo.',
       'Claude picks up the tracked .claude/commands files after the repo is initialized.',
     ];
     if (result.installedCodexSkills.length > 0) {
