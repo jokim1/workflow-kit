@@ -465,6 +465,12 @@ export interface OperatorFlags {
   // value alone in the deep merge."
   stagingCommand: string;
   prodCommand: string;
+  // Shorter input form for the common case: pick a package.json script by
+  // name. `handleSmokeSetup` resolves these to `npm run <name>` before
+  // writing config. Mutually exclusive with the matching --*-command flag.
+  // Sidesteps the quoting footgun of the full-shell-command form.
+  stagingScript: string;
+  prodScript: string;
   requireStagingSmoke: string;
   generatedSummaryPath: string;
   criticalPaths: string[];
@@ -1475,6 +1481,8 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
     revertPr: false,
     stagingCommand: '',
     prodCommand: '',
+    stagingScript: '',
+    prodScript: '',
     requireStagingSmoke: '',
     generatedSummaryPath: '',
     criticalPaths: [],
@@ -1676,6 +1684,14 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
       flags.prodCommand = readFlagValue('--prod-command');
       continue;
     }
+    if (flagName === '--staging-script') {
+      flags.stagingScript = readFlagValue('--staging-script');
+      continue;
+    }
+    if (flagName === '--prod-script') {
+      flags.prodScript = readFlagValue('--prod-script');
+      continue;
+    }
     if (flagName === '--require-staging-smoke') {
       const raw = readFlagValue('--require-staging-smoke').trim();
       if (raw !== 'true' && raw !== 'false') {
@@ -1812,12 +1828,23 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
         assertOnlyFlags(parsed, [
           'stagingCommand',
           'prodCommand',
+          'stagingScript',
+          'prodScript',
           'requireStagingSmoke',
           'generatedSummaryPath',
           'criticalPaths',
           'criticalPathCoverage',
         ]);
-        if (parsed.positional.length > 1) failUnexpected('pipelane run smoke setup [--staging-command <cmd>] [--prod-command <cmd>] [--require-staging-smoke <true|false>] [--generated-summary-path <path>] [--critical-path <path>]... [--critical-path-coverage <warn|block>]');
+        // Script and full-command forms are mutually exclusive — passing
+        // both leaves the operator's intent ambiguous. Reject with both
+        // flag names so the error message tells them what to drop.
+        if (parsed.flags.stagingScript.trim() && parsed.flags.stagingCommand.trim()) {
+          throw new Error('smoke setup: --staging-script and --staging-command are mutually exclusive — pass one.');
+        }
+        if (parsed.flags.prodScript.trim() && parsed.flags.prodCommand.trim()) {
+          throw new Error('smoke setup: --prod-script and --prod-command are mutually exclusive — pass one.');
+        }
+        if (parsed.positional.length > 1) failUnexpected('pipelane run smoke setup [--staging-script <name> | --staging-command <cmd>] [--prod-script <name> | --prod-command <cmd>] [--require-staging-smoke <true|false>] [--generated-summary-path <path>] [--critical-path <path>]... [--critical-path-coverage <warn|block>]');
         return;
       }
       assertOnlyFlags(parsed, ['reason']);
@@ -1955,6 +1982,8 @@ const FLAG_RENDERERS: Array<{ key: OperatorFlagKey; label: string; active: (flag
   { key: 'revertPr', label: '--revert-pr', active: (flags) => flags.revertPr },
   { key: 'stagingCommand', label: '--staging-command', active: (flags) => flags.stagingCommand.trim().length > 0 },
   { key: 'prodCommand', label: '--prod-command', active: (flags) => flags.prodCommand.trim().length > 0 },
+  { key: 'stagingScript', label: '--staging-script', active: (flags) => flags.stagingScript.trim().length > 0 },
+  { key: 'prodScript', label: '--prod-script', active: (flags) => flags.prodScript.trim().length > 0 },
   { key: 'requireStagingSmoke', label: '--require-staging-smoke', active: (flags) => flags.requireStagingSmoke.length > 0 },
   { key: 'generatedSummaryPath', label: '--generated-summary-path', active: (flags) => flags.generatedSummaryPath.trim().length > 0 },
   { key: 'criticalPaths', label: '--critical-path', active: (flags) => flags.criticalPaths.length > 0 },

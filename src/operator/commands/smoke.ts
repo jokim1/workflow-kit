@@ -299,10 +299,20 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
 
   const explicitStagingCommand = parsed.flags.stagingCommand.trim();
   const explicitProdCommand = parsed.flags.prodCommand.trim();
+  const explicitStagingScript = parsed.flags.stagingScript.trim();
+  const explicitProdScript = parsed.flags.prodScript.trim();
   const explicitRequireStaging = parsed.flags.requireStagingSmoke;
   const explicitGeneratedSummary = parsed.flags.generatedSummaryPath.trim();
   const explicitCriticalCoverage = parsed.flags.criticalPathCoverage;
   const explicitCriticalPaths = parsed.flags.criticalPaths;
+
+  // Short-form --staging-script resolves to `npm run <name>`. Mutual exclusion
+  // with --staging-command is enforced by validateOperatorArgs, so at most one
+  // of these two is non-empty at this point.
+  const resolvedExplicitStaging = explicitStagingCommand
+    || (explicitStagingScript ? `npm run ${explicitStagingScript}` : '');
+  const resolvedExplicitProd = explicitProdCommand
+    || (explicitProdScript ? `npm run ${explicitProdScript}` : '');
 
   const candidates = detectSmokeCandidates(context.repoRoot);
   const warnings: string[] = [];
@@ -311,10 +321,10 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
   // on exactly one strong candidate. Multiple strong / only weak / none →
   // needs input.
   let resolvedStagingCommand = stagingConfiguredBefore ? smokeBefore!.staging!.command : '';
-  let stagingAutoSource: 'flag' | 'candidate' | 'preserved' | 'none' = stagingConfiguredBefore ? 'preserved' : 'none';
-  if (explicitStagingCommand) {
-    resolvedStagingCommand = explicitStagingCommand;
-    stagingAutoSource = 'flag';
+  let stagingAutoSource: 'flag' | 'script' | 'candidate' | 'preserved' | 'none' = stagingConfiguredBefore ? 'preserved' : 'none';
+  if (resolvedExplicitStaging) {
+    resolvedStagingCommand = resolvedExplicitStaging;
+    stagingAutoSource = explicitStagingScript ? 'script' : 'flag';
   } else if (!stagingConfiguredBefore && candidates.strong.length === 1) {
     resolvedStagingCommand = `npm run ${candidates.strong[0].name}`;
     stagingAutoSource = 'candidate';
@@ -334,7 +344,7 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
       mode: 'needs input',
       repoSignal,
       stagingCommand: null,
-      prodCommand: explicitProdCommand || (prodConfiguredBefore ? smokeBefore!.prod!.command : null),
+      prodCommand: resolvedExplicitProd || (prodConfiguredBefore ? smokeBefore!.prod!.command : null),
       coverageRegistry: 'unchanged',
       releaseGate: explicitRequireStaging === 'true' ? 'misconfigured' : (smokeBefore?.requireStagingSmoke ? 'misconfigured' : 'optional'),
       nextAction,
@@ -358,7 +368,7 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
 
   // Auto-wired path. Deep-merge the smoke subtree, write the config, then
   // rebuild the smoke plan so the registry scaffolds.
-  const resolvedProdCommand = explicitProdCommand || (prodConfiguredBefore ? smokeBefore!.prod!.command : '');
+  const resolvedProdCommand = resolvedExplicitProd || (prodConfiguredBefore ? smokeBefore!.prod!.command : '');
   const resolvedRequireStaging = (() => {
     if (explicitRequireStaging === 'true') return true;
     if (explicitRequireStaging === 'false') return false;
@@ -424,7 +434,8 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
   const mode: SmokeSetupMode = sameAsBefore ? 'already configured' : 'configured';
 
   const repoSignal = (() => {
-    if (explicitStagingCommand) return `explicit --staging-command="${explicitStagingCommand}"`;
+    if (stagingAutoSource === 'script') return `explicit --staging-script=${explicitStagingScript} (resolved to ${resolvedStagingCommand})`;
+    if (stagingAutoSource === 'flag') return `explicit --staging-command="${explicitStagingCommand}"`;
     if (stagingAutoSource === 'candidate') {
       const candidate = candidates.strong[0];
       return `package script ${candidate.name} (strong: ${candidate.reason})`;
@@ -481,20 +492,25 @@ function describeRepoSignal(candidates: ScoredCandidates): string {
   return 'no smoke / e2e package scripts detected';
 }
 
+// Prefer `--staging-script=<name>` over `--staging-command="npm run <name>"`
+// whenever the candidate is a package.json script. The script form sidesteps
+// the quoting footgun of the full-command form and reads like what the
+// operator actually wants to do ("pick that script"). Keep the full-command
+// form as the fallback for non-Node repos or genuinely custom invocations.
 function buildNeedsInputNextAction(candidates: ScoredCandidates, config: Parameters<typeof formatWorkflowCommand>[0]): string {
   const setupCommand = formatWorkflowCommand(config, 'smoke', 'setup');
   if (candidates.strong.length > 1) {
-    const options = candidates.strong.map((c) => `npm run ${c.name}`).join(' | ');
-    return `rerun ${setupCommand} --staging-command="<one of: ${options}>"`;
+    const names = candidates.strong.map((c) => c.name).join(', ');
+    return `rerun ${setupCommand} --staging-script=<one of: ${names}>`;
   }
   if (candidates.strong.length === 0 && candidates.medium.length > 0) {
-    const options = candidates.medium.map((c) => `npm run ${c.name}`).join(' | ');
-    return `rerun ${setupCommand} --staging-command="<${options}, filtered to @smoke tests>"`;
+    const names = candidates.medium.map((c) => c.name).join(', ');
+    return `rerun ${setupCommand} --staging-script=<one of: ${names}> (consider adding a smoke filter: e.g. "playwright test --grep smoke")`;
   }
   if (candidates.strong.length === 0 && candidates.medium.length === 0 && candidates.weak.length > 0) {
-    return `rerun ${setupCommand} --staging-command="<your real smoke command>" (the weak candidate is not a release smoke test)`;
+    return `rerun ${setupCommand} --staging-script=<your real smoke script> — the weak candidate is not a release smoke test`;
   }
-  return `rerun ${setupCommand} --staging-command="<your smoke command>" — add a package script like "test:e2e:smoke" first if none exists`;
+  return `rerun ${setupCommand} --staging-script=<your smoke script>, or --staging-command="<full shell command>" for non-Node repos — add a package script like "test:e2e:smoke" first if none exists`;
 }
 
 function buildConfiguredNextAction(options: {

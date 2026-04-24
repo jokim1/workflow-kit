@@ -10399,6 +10399,81 @@ test('smoke setup rejects malformed --require-staging-smoke value', () => {
   }
 });
 
+test('smoke setup --staging-script=<name> writes npm run <name> to smoke.staging.command', () => {
+  const repoRoot = createSmokeSetupRepo({
+    scripts: { 'test:e2e:vip': 'playwright test' },
+  });
+  try {
+    const result = runCli(['run', 'smoke', 'setup', '--staging-script=test:e2e:vip', '--json'], repoRoot);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.setupMode, 'configured');
+    assert.equal(parsed.stagingCommand, 'npm run test:e2e:vip');
+    assert.match(parsed.repoSignal, /explicit --staging-script=test:e2e:vip/);
+    assert.match(parsed.repoSignal, /resolved to npm run test:e2e:vip/);
+    const smoke = readSmokeConfig(repoRoot);
+    assert.equal(smoke.staging.command, 'npm run test:e2e:vip');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('smoke setup --prod-script=<name> writes npm run <name> to smoke.prod.command', () => {
+  const repoRoot = createSmokeSetupRepo({
+    scripts: {
+      'test:e2e:smoke': 'playwright test --project=smoke',
+      'test:e2e:smoke:prod': 'playwright test --project=smoke-prod',
+    },
+  });
+  try {
+    runCli([
+      'run', 'smoke', 'setup',
+      '--staging-script=test:e2e:smoke',
+      '--prod-script=test:e2e:smoke:prod',
+    ], repoRoot);
+    const smoke = readSmokeConfig(repoRoot);
+    assert.equal(smoke.staging.command, 'npm run test:e2e:smoke');
+    assert.equal(smoke.prod.command, 'npm run test:e2e:smoke:prod');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('smoke setup --staging-script + --staging-command conflict with a clear error', () => {
+  const repoRoot = createSmokeSetupRepo();
+  try {
+    const result = runCli([
+      'run', 'smoke', 'setup',
+      '--staging-script=foo',
+      '--staging-command=bar',
+    ], repoRoot, {}, true);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--staging-script and --staging-command are mutually exclusive/);
+    assert.equal(readSmokeConfig(repoRoot), null);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('smoke setup needs-input output recommends --staging-script= form (not --staging-command=)', () => {
+  const repoRoot = createSmokeSetupRepo({
+    scripts: { 'test:e2e:vip': 'playwright test e2e/vip.spec.ts' },
+  });
+  try {
+    const result = runCli(['run', 'smoke', 'setup'], repoRoot);
+    // Medium candidate → needs input. The recommended next action should
+    // use --staging-script=, NOT --staging-command= — that's the whole
+    // point of this PR: sidestep the quoting footgun.
+    assert.match(result.stdout, /Smoke setup: needs input/);
+    assert.match(result.stdout, /--staging-script=/);
+    // Must not recommend the --staging-command= form as the first option
+    // for a package-script candidate.
+    const nextLine = result.stdout.split('\n').find((line) => line.startsWith('Next:')) ?? '';
+    assert.doesNotMatch(nextLine, /--staging-command=/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // buildSmokeHandoffMessage — pure unit tests across all 3 stages × 3 states
 // ---------------------------------------------------------------------------

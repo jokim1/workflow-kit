@@ -22,20 +22,28 @@ Rules:
 - `setup` refuses to promote a release gate it cannot run: `--require-staging-smoke=true` plus no staging command is treated as misconfigured and exits 1.
 - `setup` exit codes: 0 for `configured` / `already configured` / `needs input`; 1 for `misconfigured` or write failures.
 
-## Setup quoting
+## Setup input forms
 
-`--staging-command` values routinely contain spaces and shell metacharacters. Quote them carefully:
+For the common case — picking a package.json script — use the **script form**. No quoting, no `npm run` prefix, no shell-escape gotchas:
 
-- **Claude slash command:** `/smoke setup --staging-command="npm run test:e2e:smoke"` (single quotes also work).
+- `/smoke setup --staging-script=test:e2e:smoke` → writes `smoke.staging.command = "npm run test:e2e:smoke"`.
+- `/smoke setup --prod-script=test:e2e:smoke:prod` → writes `smoke.prod.command = "npm run test:e2e:smoke:prod"`.
+
+For non-Node repos or custom invocations, use the **command form**:
+
+- **Claude slash command:** `/smoke setup --staging-command="make smoke"` (single quotes also work).
 - **Codex skill:** same double-quoted form.
-- **npm script:** `npm run pipelane:smoke -- setup --staging-command="npm run test:e2e:smoke"` (note the `--` separator).
-- **Bare CLI:** `pipelane run smoke setup --staging-command='npm run test:e2e:smoke --grep="smoke-auth"'` (single quotes when the value contains double quotes; avoid literal `@smoke-*` tag syntax in docs or smoke tag discovery will treat the doc itself as a test source).
+- **npm script:** `npm run pipelane:smoke -- setup --staging-command="make smoke"` (note the `--` separator).
+- **Bare CLI:** `pipelane run smoke setup --staging-command='pytest -k smoke --workers=2'` (single quotes when the value contains double quotes; avoid literal `@smoke-*` tag syntax in docs or smoke tag discovery will treat the doc itself as a test source).
+
+Script and command forms are **mutually exclusive** — pass one or the other, not both.
 
 Setup flags (accepted only on `smoke setup`):
 
-- `--staging-command=<cmd>` — required unless auto-wired or already configured.
-- `--prod-command=<cmd>` — optional; omitted prod commands stay unconfigured.
-- `--require-staging-smoke=true|false` — release-gate switch; must pair with a staging command when true.
+- `--staging-script=<name>` — package.json script name; auto-prefixed to `npm run <name>`. Preferred when applicable.
+- `--staging-command=<cmd>` — full shell command. Use when not a package script.
+- `--prod-script=<name>` / `--prod-command=<cmd>` — same shape for production. Mutually exclusive with each other.
+- `--require-staging-smoke=true|false` — release-gate switch; must pair with a staging script/command when true.
 - `--generated-summary-path=<path>` — override the smoke summary output path.
 - `--critical-path=<surface-or-path>` — repeatable; deduped, first-seen order preserved.
 - `--critical-path-coverage=warn|block` — how /deploy prod treats uncovered critical paths.
