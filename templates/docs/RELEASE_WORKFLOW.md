@@ -38,11 +38,15 @@ follow safely without improvising repo behavior.
 - `npm run pipelane:clean`
 - `npm run pipelane:status`
 - `npm run pipelane:doctor` (add `-- --probe` for staging healthchecks, `-- --fix` for the guided wizard)
+- `npm run pipelane:board`
+- `npm run pipelane:update`
 
 ### AI-client Slash Surface
 
 This repo exposes the following user-facing slash commands through Claude/Codex adapters:
 
+- `/pipelane` (journey overview)
+- `/pipelane web` (local web board)
 - `{{ALIAS_DEVMODE}}`
 - `{{ALIAS_NEW}}`
 - `{{ALIAS_RESUME}}`

@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { DEFAULT_WORKFLOW_ALIASES, loadWorkflowConfig, resolveReadableConfigPath, type WorkflowCommand } from '../operator/state.ts';
+
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 3033;
 const SNAPSHOT_CACHE_MS = 10_000;
@@ -60,6 +62,13 @@ interface DashboardSettings {
   boardSubtitle: string;
   preferredPort: number;
   autoRefreshSeconds: number;
+}
+
+interface DashboardHelp {
+  aliases: Record<WorkflowCommand, string>;
+  source: 'repo-config' | 'defaults';
+  configPath: string | null;
+  warning: string;
 }
 
 const DEFAULT_BOARD_SUBTITLE = 'Pipelane — the release cockpit for AI vibe coders. Branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.';
@@ -138,6 +147,26 @@ function writeDashboardSettings(repoRoot: string, settingsPath: string, patch: P
   mkdirSync(path.dirname(settingsPath), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(normalized, null, 2) + '\n', 'utf8');
   return normalized;
+}
+
+function readDashboardHelp(repoRoot: string): DashboardHelp {
+  try {
+    const config = loadWorkflowConfig(repoRoot);
+    return {
+      aliases: { ...config.aliases },
+      source: 'repo-config',
+      configPath: resolveReadableConfigPath(repoRoot),
+      warning: '',
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      aliases: { ...DEFAULT_WORKFLOW_ALIASES },
+      source: 'defaults',
+      configPath: resolveReadableConfigPath(repoRoot),
+      warning: message,
+    };
+  }
 }
 
 function readJsonBody(req: IncomingMessage): Promise<JsonObject> {
@@ -660,6 +689,14 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
           uiFileExists: existsSync(uiFilePath),
           settingsPath: options.settingsPath,
           checkedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (method === 'GET' && pathname === '/api/help') {
+        sendJson(res, 200, {
+          ok: true,
+          ...readDashboardHelp(options.repoRoot),
         });
         return;
       }

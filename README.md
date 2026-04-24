@@ -109,6 +109,7 @@ npm run dashboard -- --repo /absolute/path/to/your/repo
 The board shows:
 
 - `Attention` and repo-wide release context first
+- a `?` help guide for the build and release slash-command journeys
 - one active pipeline card per branch
 - lane reasons and status history
 - row actions and board-level actions
@@ -618,6 +619,8 @@ Pipelane fails closed if an alias would overwrite an unrelated Claude command or
 
 ## Command Reference
 
+- `/pipelane`: show the build/release journey overview
+- `/pipelane web`: open the local Pipelane Board
 - `/devmode`: inspect or switch between `build` and `release`
 - `/new`: create a fresh isolated task workspace
 - `/resume`: recover an existing task workspace
@@ -647,6 +650,7 @@ Canonical repo-native commands:
 - `npm run pipelane:doctor`
 - `npm run pipelane:rollback`
 - `npm run pipelane:board`
+- `npm run pipelane:update`
 
 ## Use Pipelane With Gstack
 
@@ -740,6 +744,8 @@ npm run pipelane:clean
 
 ### Command surface
 
+- `/pipelane` (journey overview)
+- `/pipelane web` (local web board)
 - `/devmode`
 - `/new`
 - `/resume`
@@ -767,6 +773,8 @@ Canonical repo-native commands:
 - `npm run pipelane:clean`
 - `npm run pipelane:status`
 - `npm run pipelane:doctor` (add `-- --probe` for live healthchecks, `-- --fix` for the guided wizard)
+- `npm run pipelane:board`
+- `npm run pipelane:update`
 
 ### pipelane + gstack
 

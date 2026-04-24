@@ -35,11 +35,12 @@ const CLAUDE_COMMAND_MARKER = '<!-- pipelane:command:';
 const CONSUMER_EXTENSION_MARKER_START = '<!-- pipelane:consumer-extension:start -->';
 const CONSUMER_EXTENSION_MARKER_END = '<!-- pipelane:consumer-extension:end -->';
 const MANAGED_CLAUDE_COMMANDS_FILENAME = '.pipelane-managed.json';
-// Two-signature legacy detection: first-line description + the command's
-// npm script prefix. Truncated to `npm run pipelane:<cmd>` so the match
-// survives any `-- $ARGUMENTS` / `-- --apply` / bare-invocation variant
-// current-main templates have emitted. Consumers that had these files
-// generated before this PR carry no marker, so detection falls back here.
+// Two-signature legacy detection: first-line description + a distinctive body
+// string. For workflow commands the body string is usually the npm script
+// prefix, truncated to `npm run pipelane:<cmd>` so the match survives any
+// `-- $ARGUMENTS` / `-- --apply` / bare-invocation variant current-main
+// templates have emitted. Consumers that had these files generated before this
+// PR carry no marker, so detection falls back here.
 // Exported for structural validation in test/pipelane.test.mjs —
 // every MANAGED_COMMANDS member must have a non-empty signature array so
 // pre-marker consumer files upgrade cleanly on the next setup instead of
@@ -93,17 +94,14 @@ export const LEGACY_CLAUDE_SIGNATURES: Record<ManagedCommand, string[]> = {
     'Roll back the last staging or production deploy to the most recent verified-good SHA.',
     'npm run pipelane:rollback',
   ],
-  // `pipelane` shipped without a marker on main before this PR landed, so
-  // existing consumers have a `.claude/commands/pipelane.md` we need to
-  // upgrade in place on the next setup run. Three distinctive strings
-  // (not two) make it vanishingly unlikely a consumer-authored pipelane.md
-  // hits every signature by coincidence — each adds a ~1-in-thousands
-  // specificity layer, and together they're effectively
-  // "this file was generated from the pipelane.md template."
+  // `pipelane` is a managed extra command with a fixed filename. Keep the
+  // current template signatures here so the template/signature invariant stays
+  // honest; older template variants live in ADDITIONAL_LEGACY_CLAUDE_SIGNATURES
+  // below so already-installed consumers still upgrade in place.
   pipelane: [
     'Run a Pipelane subcommand for this repo.',
-    'npm run pipelane:board',
-    '## Pipelane Board (default)',
+    '## JOURNEY OVERVIEW',
+    '/pipelane web',
   ],
   // `fix.md` ships marker-first, so legacy detection is mostly a formality —
   // no pre-marker consumer files exist. Two distinctive body strings satisfy
@@ -114,6 +112,24 @@ export const LEGACY_CLAUDE_SIGNATURES: Record<ManagedCommand, string[]> = {
     '### Refuse these shims unconditionally',
   ],
 };
+
+const ADDITIONAL_LEGACY_CLAUDE_SIGNATURES: Partial<Record<ManagedCommand, string[][]>> = {
+  // Pre-overview `/pipelane` opened the board by default and shipped without
+  // the command marker. Keep recognizing that exact old shape without forcing
+  // stale "Board (default)" copy to remain in the current template forever.
+  pipelane: [[
+    'Run a Pipelane subcommand for this repo.',
+    'npm run pipelane:board',
+    '## Pipelane Board (default)',
+  ]],
+};
+
+function legacyClaudeSignatureSets(command: ManagedCommand): string[][] {
+  return [
+    LEGACY_CLAUDE_SIGNATURES[command],
+    ...(ADDITIONAL_LEGACY_CLAUDE_SIGNATURES[command] ?? []),
+  ];
+}
 
 function kitRoot(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -176,8 +192,9 @@ export function renderClaudeMdFromTemplate(config: WorkflowConfig): string {
 
 function detectLegacyClaudeCommand(content: string, filename?: string): ManagedCommand | null {
   for (const command of MANAGED_COMMANDS) {
-    const signatures = LEGACY_CLAUDE_SIGNATURES[command];
-    if (!signatures.every((signature) => content.includes(signature))) {
+    const matchedSignatures = legacyClaudeSignatureSets(command)
+      .some((signatures) => signatures.every((signature) => content.includes(signature)));
+    if (!matchedSignatures) {
       continue;
     }
     // Extras (pipelane.md) use fixed, non-aliased filenames. Gating
