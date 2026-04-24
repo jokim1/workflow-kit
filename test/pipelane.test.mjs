@@ -10185,18 +10185,22 @@ test('smoke setup scores grep-filtered command as strong (plan: @smoke / --grep.
   }
 });
 
-test('smoke setup returns needs-input on a medium-only test:e2e candidate (plan: test:e2e without smoke filtering)', () => {
+test('smoke setup auto-wires a single medium candidate with a warning (relaxed auto-wire rule)', () => {
   const repoRoot = createSmokeSetupRepo({
     scripts: { 'test:e2e': 'playwright test' },
   });
   try {
     const result = runCli(['run', 'smoke', 'setup', '--json'], repoRoot);
     const parsed = JSON.parse(result.stdout);
-    assert.equal(parsed.setupMode, 'needs input');
-    assert.equal(parsed.stagingCommand, null);
-    assert.equal(parsed.smokeConfigured, false);
-    assert.ok(parsed.candidates.medium.some((c) => c.name === 'test:e2e'));
-    assert.equal(readSmokeConfig(repoRoot), null);
+    assert.equal(parsed.setupMode, 'configured');
+    assert.equal(parsed.stagingCommand, 'npm run test:e2e');
+    assert.equal(parsed.smokeConfigured, true);
+    // Warning must surface the tradeoff the operator just implicitly made.
+    assert.ok(parsed.warnings.some((w) => /no smoke filter detected/.test(w)));
+    assert.match(parsed.repoSignal, /medium/);
+    // Config written with the medium command.
+    const smoke = readSmokeConfig(repoRoot);
+    assert.equal(smoke.staging.command, 'npm run test:e2e');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -10394,6 +10398,100 @@ test('smoke setup rejects malformed --require-staging-smoke value', () => {
     const result = runCli(['run', 'smoke', 'setup', '--staging-command=x', '--require-staging-smoke=yes'], repoRoot, {}, true);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /--require-staging-smoke must be "true" or "false"/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('smoke setup --staging-script=<name> writes npm run <name> to smoke.staging.command', () => {
+  const repoRoot = createSmokeSetupRepo({
+    scripts: { 'test:e2e:vip': 'playwright test' },
+  });
+  try {
+    const result = runCli(['run', 'smoke', 'setup', '--staging-script=test:e2e:vip', '--json'], repoRoot);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.setupMode, 'configured');
+    assert.equal(parsed.stagingCommand, 'npm run test:e2e:vip');
+    assert.match(parsed.repoSignal, /explicit --staging-script=test:e2e:vip/);
+    assert.match(parsed.repoSignal, /resolved to npm run test:e2e:vip/);
+    const smoke = readSmokeConfig(repoRoot);
+    assert.equal(smoke.staging.command, 'npm run test:e2e:vip');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('smoke setup --prod-script=<name> writes npm run <name> to smoke.prod.command', () => {
+  const repoRoot = createSmokeSetupRepo({
+    scripts: {
+      'test:e2e:smoke': 'playwright test --project=smoke',
+      'test:e2e:smoke:prod': 'playwright test --project=smoke-prod',
+    },
+  });
+  try {
+    runCli([
+      'run', 'smoke', 'setup',
+      '--staging-script=test:e2e:smoke',
+      '--prod-script=test:e2e:smoke:prod',
+    ], repoRoot);
+    const smoke = readSmokeConfig(repoRoot);
+    assert.equal(smoke.staging.command, 'npm run test:e2e:smoke');
+    assert.equal(smoke.prod.command, 'npm run test:e2e:smoke:prod');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('smoke setup --staging-script + --staging-command conflict with a clear error', () => {
+  const repoRoot = createSmokeSetupRepo();
+  try {
+    const result = runCli([
+      'run', 'smoke', 'setup',
+      '--staging-script=foo',
+      '--staging-command=bar',
+    ], repoRoot, {}, true);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /--staging-script and --staging-command are mutually exclusive/);
+    assert.equal(readSmokeConfig(repoRoot), null);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('smoke setup with multiple strong candidates emits a numbered Candidates block', () => {
+  const repoRoot = createSmokeSetupRepo({
+    scripts: {
+      'test:e2e:smoke': 'playwright test --project=smoke',
+      'test:smoke': 'cypress run --spec "cypress/smoke/**/*"',
+    },
+  });
+  try {
+    const result = runCli(['run', 'smoke', 'setup'], repoRoot);
+    assert.match(result.stdout, /Smoke setup: needs input/);
+    assert.match(result.stdout, /Candidates:\n/);
+    assert.match(result.stdout, /  1\. test:e2e:smoke \(strong — /);
+    assert.match(result.stdout, /  2\. test:smoke \(strong — /);
+    // "Next" line should point at --staging-script= with a concrete
+    // example from the list.
+    assert.match(result.stdout, /Next: pick one and rerun, e\.g\. \/smoke setup --staging-script=test:e2e:smoke/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('smoke setup needs-input output recommends --staging-script= form (not --staging-command=)', () => {
+  const repoRoot = createSmokeSetupRepo({
+    scripts: {
+      'test:e2e:smoke': 'playwright test --project=smoke',
+      'test:smoke': 'cypress run --spec cypress/smoke/**/*',
+    },
+  });
+  try {
+    const result = runCli(['run', 'smoke', 'setup'], repoRoot);
+    assert.match(result.stdout, /Smoke setup: needs input/);
+    assert.match(result.stdout, /--staging-script=/);
+    const nextLine = result.stdout.split('\n').find((line) => line.startsWith('Next:')) ?? '';
+    assert.doesNotMatch(nextLine, /--staging-command=/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }

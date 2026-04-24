@@ -299,25 +299,51 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
 
   const explicitStagingCommand = parsed.flags.stagingCommand.trim();
   const explicitProdCommand = parsed.flags.prodCommand.trim();
+  const explicitStagingScript = parsed.flags.stagingScript.trim();
+  const explicitProdScript = parsed.flags.prodScript.trim();
   const explicitRequireStaging = parsed.flags.requireStagingSmoke;
   const explicitGeneratedSummary = parsed.flags.generatedSummaryPath.trim();
   const explicitCriticalCoverage = parsed.flags.criticalPathCoverage;
   const explicitCriticalPaths = parsed.flags.criticalPaths;
 
+  // Short-form --staging-script resolves to `npm run <name>`. Mutual exclusion
+  // with --staging-command is enforced by validateOperatorArgs, so at most one
+  // of these two is non-empty at this point.
+  const resolvedExplicitStaging = explicitStagingCommand
+    || (explicitStagingScript ? `npm run ${explicitStagingScript}` : '');
+  const resolvedExplicitProd = explicitProdCommand
+    || (explicitProdScript ? `npm run ${explicitProdScript}` : '');
+
   const candidates = detectSmokeCandidates(context.repoRoot);
   const warnings: string[] = [];
 
-  // Decide the staging command. Explicit flag wins. Otherwise auto-wire only
-  // on exactly one strong candidate. Multiple strong / only weak / none →
-  // needs input.
+  // Decide the staging command. Explicit flag wins. Otherwise auto-wire when
+  // there is exactly one non-weak candidate (strong or medium). Weak-only is
+  // explicitly refused — weak candidates (e.g. "node ./cli.ts --help") are
+  // not release smoke tests. Multiple candidates → needs input so the
+  // operator picks from a numbered list.
   let resolvedStagingCommand = stagingConfiguredBefore ? smokeBefore!.staging!.command : '';
-  let stagingAutoSource: 'flag' | 'candidate' | 'preserved' | 'none' = stagingConfiguredBefore ? 'preserved' : 'none';
-  if (explicitStagingCommand) {
-    resolvedStagingCommand = explicitStagingCommand;
-    stagingAutoSource = 'flag';
+  let stagingAutoSource: 'flag' | 'script' | 'strong-candidate' | 'medium-candidate' | 'preserved' | 'none' = stagingConfiguredBefore ? 'preserved' : 'none';
+  let autoWiredCandidate: SmokeSetupCandidate | null = null;
+  if (resolvedExplicitStaging) {
+    resolvedStagingCommand = resolvedExplicitStaging;
+    stagingAutoSource = explicitStagingScript ? 'script' : 'flag';
   } else if (!stagingConfiguredBefore && candidates.strong.length === 1) {
-    resolvedStagingCommand = `npm run ${candidates.strong[0].name}`;
-    stagingAutoSource = 'candidate';
+    autoWiredCandidate = candidates.strong[0];
+    resolvedStagingCommand = `npm run ${autoWiredCandidate.name}`;
+    stagingAutoSource = 'strong-candidate';
+  } else if (!stagingConfiguredBefore && candidates.strong.length === 0 && candidates.medium.length === 1) {
+    // Single medium candidate — auto-wire but surface the tradeoff. The
+    // operator sees a warning that the full e2e suite (no smoke filter)
+    // is now their release gate, and can rerun with a different script
+    // if they meant something else.
+    autoWiredCandidate = candidates.medium[0];
+    resolvedStagingCommand = `npm run ${autoWiredCandidate.name}`;
+    stagingAutoSource = 'medium-candidate';
+    warnings.push(
+      `no smoke filter detected on ${autoWiredCandidate.name} — the full e2e suite is now your release gate. ` +
+      `Consider tagging critical tests @smoke and adding a filtered script for faster smoke runs.`,
+    );
   }
 
   // Resolve needs-input cases. Precedence: explicit flag > existing config >
@@ -334,7 +360,7 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
       mode: 'needs input',
       repoSignal,
       stagingCommand: null,
-      prodCommand: explicitProdCommand || (prodConfiguredBefore ? smokeBefore!.prod!.command : null),
+      prodCommand: resolvedExplicitProd || (prodConfiguredBefore ? smokeBefore!.prod!.command : null),
       coverageRegistry: 'unchanged',
       releaseGate: explicitRequireStaging === 'true' ? 'misconfigured' : (smokeBefore?.requireStagingSmoke ? 'misconfigured' : 'optional'),
       nextAction,
@@ -358,7 +384,7 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
 
   // Auto-wired path. Deep-merge the smoke subtree, write the config, then
   // rebuild the smoke plan so the registry scaffolds.
-  const resolvedProdCommand = explicitProdCommand || (prodConfiguredBefore ? smokeBefore!.prod!.command : '');
+  const resolvedProdCommand = resolvedExplicitProd || (prodConfiguredBefore ? smokeBefore!.prod!.command : '');
   const resolvedRequireStaging = (() => {
     if (explicitRequireStaging === 'true') return true;
     if (explicitRequireStaging === 'false') return false;
@@ -424,10 +450,13 @@ async function handleSmokeSetup(cwd: string, parsed: ParsedOperatorArgs): Promis
   const mode: SmokeSetupMode = sameAsBefore ? 'already configured' : 'configured';
 
   const repoSignal = (() => {
-    if (explicitStagingCommand) return `explicit --staging-command="${explicitStagingCommand}"`;
-    if (stagingAutoSource === 'candidate') {
-      const candidate = candidates.strong[0];
-      return `package script ${candidate.name} (strong: ${candidate.reason})`;
+    if (stagingAutoSource === 'script') return `explicit --staging-script=${explicitStagingScript} (resolved to ${resolvedStagingCommand})`;
+    if (stagingAutoSource === 'flag') return `explicit --staging-command="${explicitStagingCommand}"`;
+    if (stagingAutoSource === 'strong-candidate' && autoWiredCandidate) {
+      return `package script ${autoWiredCandidate.name} (strong: ${autoWiredCandidate.reason})`;
+    }
+    if (stagingAutoSource === 'medium-candidate' && autoWiredCandidate) {
+      return `package script ${autoWiredCandidate.name} (medium: ${autoWiredCandidate.reason})`;
     }
     if (stagingAutoSource === 'preserved') return 'existing .pipelane.json smoke.staging.command';
     return 'unknown';
@@ -481,20 +510,22 @@ function describeRepoSignal(candidates: ScoredCandidates): string {
   return 'no smoke / e2e package scripts detected';
 }
 
+// Reaches this path only on genuine ambiguity — multiple candidates, or
+// zero plausible candidates. Single-candidate cases now auto-wire upstream
+// (including single-medium with a warning). Output pairs with the numbered
+// Candidates block so the agent in chat can drive the pick.
 function buildNeedsInputNextAction(candidates: ScoredCandidates, config: Parameters<typeof formatWorkflowCommand>[0]): string {
   const setupCommand = formatWorkflowCommand(config, 'smoke', 'setup');
-  if (candidates.strong.length > 1) {
-    const options = candidates.strong.map((c) => `npm run ${c.name}`).join(' | ');
-    return `rerun ${setupCommand} --staging-command="<one of: ${options}>"`;
+  const firstName = candidates.strong[0]?.name
+    ?? candidates.medium[0]?.name
+    ?? candidates.weak[0]?.name
+    ?? '';
+  if (firstName) {
+    // Example uses the first listed candidate's name so the agent has a
+    // concrete template. The Candidates: block above provides the full list.
+    return `pick one and rerun, e.g. ${setupCommand} --staging-script=${firstName}`;
   }
-  if (candidates.strong.length === 0 && candidates.medium.length > 0) {
-    const options = candidates.medium.map((c) => `npm run ${c.name}`).join(' | ');
-    return `rerun ${setupCommand} --staging-command="<${options}, filtered to @smoke tests>"`;
-  }
-  if (candidates.strong.length === 0 && candidates.medium.length === 0 && candidates.weak.length > 0) {
-    return `rerun ${setupCommand} --staging-command="<your real smoke command>" (the weak candidate is not a release smoke test)`;
-  }
-  return `rerun ${setupCommand} --staging-command="<your smoke command>" — add a package script like "test:e2e:smoke" first if none exists`;
+  return `rerun ${setupCommand} --staging-script=<your smoke script>, or --staging-command="<full shell command>" for non-Node repos — add a package script like "test:e2e:smoke" first if none exists`;
 }
 
 function buildConfiguredNextAction(options: {
@@ -518,8 +549,25 @@ function emitSetupOutcome(parsed: ParsedOperatorArgs, outcome: SmokeSetupOutcome
     `Production command: ${outcome.prodCommand ?? 'not configured'}`,
     `Coverage registry: ${outcome.coverageRegistry}${outcome.configPath ? ` (via ${path.basename(outcome.configPath)})` : ''}`,
     `Release gate: ${outcome.releaseGate}`,
-    `Next: ${outcome.nextAction}`,
   ];
+  // On needs-input, surface a numbered candidates block so the agent in
+  // chat (or the operator reading output directly) can pick without
+  // re-parsing the JSON payload. Strong candidates come first, then
+  // medium, then weak — one flat numbered list, not three columns.
+  if (outcome.mode === 'needs input') {
+    const allCandidates = [
+      ...outcome.candidates.strong.map((c) => ({ ...c, strength: 'strong' as const })),
+      ...outcome.candidates.medium.map((c) => ({ ...c, strength: 'medium' as const })),
+      ...outcome.candidates.weak.map((c) => ({ ...c, strength: 'weak' as const })),
+    ];
+    if (allCandidates.length > 0) {
+      lines.push('Candidates:');
+      allCandidates.forEach((candidate, index) => {
+        lines.push(`  ${index + 1}. ${candidate.name} (${candidate.strength} — ${candidate.reason})`);
+      });
+    }
+  }
+  lines.push(`Next: ${outcome.nextAction}`);
   if (outcome.configPathIsLegacy) {
     lines.push(`Note: wrote updates to legacy .project-workflow.json — consider migrating to .pipelane.json.`);
   }
