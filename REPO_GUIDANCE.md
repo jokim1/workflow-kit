@@ -48,9 +48,8 @@ cleaner approach failed.
   files.
 - **`$ARGUMENTS` subcommand routing is first-token-equals, never
   starts-with.** `/pipelane update-this-thing` must NOT route to the
-  `update` subcommand. `fix.md` encodes this explicitly; `pipelane.md`
-  historically relies on the looser convention and needs care when
-  extended. Re-check on every subcommand addition.
+  `update` subcommand. `fix.md` and `pipelane.md` encode this explicitly.
+  Re-check on every subcommand addition.
 - **`CLAUDE.md` and `REPO_GUIDANCE.md` are consumer-owned forever.**
   Pipelane writes them once in `setupConsumerRepo` (docs.ts:555) when
   absent, never re-syncs. `pipelane:sync-docs` must never overwrite

@@ -1894,6 +1894,56 @@ test('legacy pipelane.md (no marker) is upgraded in place on next setup', () => 
   }
 });
 
+test('pipelane.md renders a journey-first overview with real slash aliases', () => {
+  const repoRoot = createRepo();
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    const configPath = path.join(repoRoot, '.pipelane.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.aliases.new = '/start';
+    config.aliases.clean = '/tidy';
+    config.aliases.status = '/where';
+    writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+    runCli(['setup'], repoRoot, { CODEX_HOME: codexHome });
+
+    const pipelane = readFileSync(path.join(repoRoot, '.claude', 'commands', 'pipelane.md'), 'utf8');
+    assert.doesNotMatch(pipelane, /\{\{ALIAS_/);
+    assert.match(pipelane, /Pick a lane:/);
+    assert.match(pipelane, /1\. Build journey/);
+    assert.match(pipelane, /\/devmode build\s+Set the repo to build mode\./);
+    assert.match(pipelane, /\/start "task name"\s+Create a clean task worktree and branch\./);
+    assert.match(pipelane, /\/pr\s+Run pre-PR checks, commit, push, and open or update the PR\./);
+    assert.match(pipelane, /\/merge\s+Merge the PR\. In build mode, this hands off to the prod deploy path\./);
+    assert.match(pipelane, /\/tidy\s+Clean up finished task state after the release is complete\./);
+    assert.match(pipelane, /2\. Release journey/);
+    assert.match(pipelane, /\/deploy staging\s+Deploy the merged SHA to staging\./);
+    assert.match(pipelane, /\/smoke staging\s+Run or verify staging smoke checks\./);
+    assert.match(pipelane, /\/deploy prod\s+Promote the same merged SHA to production\./);
+    assert.match(pipelane, /\/where\s+See where tasks, PRs, deploys, and release gates stand\./);
+    assert.match(pipelane, /\/pipelane web\s+Open the local Pipelane Board\./);
+    assert.match(pipelane, /\/pipelane update --check\s+Check whether Pipelane itself has updates\./);
+    assert.doesNotMatch(pipelane, /Pipelane Board \(default\)/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('pipelane.md documents exact first-token routing for subcommands', () => {
+  const templatePath = path.join(KIT_ROOT, 'templates', '.claude', 'commands', 'pipelane.md');
+  const template = readFileSync(templatePath, 'utf8');
+
+  assert.match(template, /Exactly equals `web`/);
+  assert.match(template, /Exactly equals `status`/);
+  assert.match(template, /Exactly equals `update`/);
+  assert.match(template, /No prefix matching/);
+  assert.match(template, /`\/pipelane update-this-thing` routes to UNKNOWN MODE, not UPDATE MODE/);
+});
+
 test('unrelated pre-existing pipelane.md raises collision instead of silently clobbering', () => {
   // A consumer who authored their own .claude/commands/pipelane.md
   // without the legacy signatures shouldn't have it overwritten. This
@@ -5581,6 +5631,49 @@ test('dashboard proxies pipelane:api routes and persists local board settings', 
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(fakeBin, { recursive: true, force: true });
   }
+});
+
+test('dashboard help endpoint exposes configured slash aliases', async () => {
+  const repoRoot = createRepo();
+  let server;
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.aliases.new = '/start';
+      config.aliases.clean = '/tidy';
+      config.aliases.status = '/where';
+    });
+
+    server = await startDashboardServer(repoRoot);
+    const help = await fetch(`${server.baseUrl}/api/help`).then((response) => response.json());
+
+    assert.equal(help.ok, true);
+    assert.equal(help.source, 'repo-config');
+    assert.equal(help.aliases.new, '/start');
+    assert.equal(help.aliases.clean, '/tidy');
+    assert.equal(help.aliases.status, '/where');
+    assert.ok(help.configPath.endsWith('.pipelane.json'));
+  } finally {
+    if (server?.processHandle) {
+      server.processHandle.kill('SIGTERM');
+      await once(server.processHandle, 'exit').catch(() => undefined);
+    }
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('dashboard UI ships a Pipelane help drawer', () => {
+  const html = readFileSync(path.join(KIT_ROOT, 'src', 'dashboard', 'public', 'index.html'), 'utf8');
+
+  assert.match(html, /id="help-button"/);
+  assert.match(html, /data-help-open="true"/);
+  assert.match(html, /id="help-overlay"/);
+  assert.match(html, /Pipelane Guide/);
+  assert.match(html, /Build Journey/);
+  assert.match(html, /Release Journey/);
+  assert.match(html, /Web Commands/);
+  assert.match(html, /\/pipelane update --check/);
 });
 
 async function runCliAsync(args, cwd, env = {}) {

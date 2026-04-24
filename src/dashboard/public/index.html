@@ -1123,6 +1123,117 @@
       line-height: 1.5;
     }
 
+    .help-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      z-index: 73;
+      pointer-events: none;
+    }
+
+    .help-overlay.open {
+      display: block;
+    }
+
+    .help-shell {
+      position: absolute;
+      inset: 0 0 0 auto;
+      width: min(620px, 100vw);
+      display: flex;
+      justify-content: flex-end;
+      pointer-events: none;
+    }
+
+    .help-panel {
+      pointer-events: auto;
+      width: min(620px, 100vw);
+      height: 100%;
+      background: rgba(6, 16, 21, 0.98);
+      border-left: 1px solid var(--line);
+      box-shadow: -18px 0 60px rgba(0, 0, 0, 0.42);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .help-panel-header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(6, 16, 21, 0.98);
+      backdrop-filter: blur(12px);
+    }
+
+    .help-panel-body {
+      flex: 1;
+      overflow: auto;
+      padding: 18px 20px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+
+    .help-section {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .help-section-title {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--subtle);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .help-command-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .help-command-row {
+      display: grid;
+      grid-template-columns: minmax(150px, 0.48fr) minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.025);
+      border-radius: 14px;
+      padding: 11px 12px;
+    }
+
+    .help-command-name {
+      font-family: var(--mono);
+      color: #d8f3ff;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .help-command-text {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .help-callout {
+      border: 1px solid rgba(108, 180, 238, 0.28);
+      background: rgba(108, 180, 238, 0.08);
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
     .detail-empty {
       padding: 20px;
       color: var(--muted);
@@ -1513,6 +1624,10 @@
       .detail-panel {
         width: 100vw;
       }
+
+      .help-command-row {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
@@ -1528,6 +1643,9 @@
           </div>
           <div class="hero-actions">
             <div class="hero-icon-actions">
+              <button class="button icon" id="help-button" type="button" data-help-open="true" aria-label="Pipelane help" title="Pipelane help">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 1 1 4.83 2.36c-.9.62-1.42 1.14-1.42 2.14"/><path d="M12 17h.01"/></svg>
+              </button>
               <button class="button icon" id="settings-button" type="button" data-settings-open="true" aria-label="Settings" title="Settings">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.26.604.846 1 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               </button>
@@ -1588,6 +1706,21 @@
 
   <div class="context-menu" id="branch-context-menu" aria-hidden="true"></div>
 
+  <div class="help-overlay" id="help-overlay" aria-hidden="true">
+    <div class="help-shell">
+      <section class="help-panel">
+        <div class="help-panel-header">
+          <div>
+            <div class="panel-title">Pipelane Guide</div>
+            <div class="footer-note" id="help-status">Loading slash command guide…</div>
+          </div>
+          <button class="detail-close" type="button" aria-label="Close Pipelane help" data-help-close="button">×</button>
+        </div>
+        <div class="help-panel-body" id="help-content"></div>
+      </section>
+    </div>
+  </div>
+
   <div class="settings-overlay" id="settings-overlay" aria-hidden="true">
     <div class="settings-shell">
       <section class="settings-panel">
@@ -1624,9 +1757,26 @@
   <script>
     const DEFAULT_BOARD_TITLE = 'Pipelane';
     const DEFAULT_BOARD_SUBTITLE = 'Pipelane — the release cockpit for AI vibe coders. Branch pipeline triage, action preflight, execution follow-through, and cleanup discipline.';
+    const DEFAULT_HELP_ALIASES = {
+      devmode: '/devmode',
+      new: '/new',
+      resume: '/resume',
+      'repo-guard': '/repo-guard',
+      pr: '/pr',
+      merge: '/merge',
+      deploy: '/deploy',
+      smoke: '/smoke',
+      clean: '/clean',
+      status: '/status',
+      doctor: '/doctor',
+      rollback: '/rollback',
+    };
 
     const state = {
       health: null,
+      help: null,
+      helpOpen: false,
+      helpNotice: '',
       settings: null,
       settingsPath: '',
       settingsOpen: false,
@@ -1655,6 +1805,7 @@
       eventSource: null,
       loading: {
         settings: false,
+        help: false,
         snapshot: false,
         branch: false,
         patch: false,
@@ -1689,6 +1840,23 @@
       };
     }
 
+    function currentHelpAliases() {
+      return {
+        ...DEFAULT_HELP_ALIASES,
+        ...(state.help?.aliases || {}),
+      };
+    }
+
+    function helpStatusText() {
+      if (state.loading.help) {
+        return 'Loading slash command guide…';
+      }
+      if (state.helpNotice) {
+        return state.helpNotice;
+      }
+      return 'Slash command journeys for build and release work.';
+    }
+
     function currentAutoRefreshMs() {
       return Math.max(10_000, Number(currentSettings().autoRefreshSeconds || 30) * 1000);
     }
@@ -1712,8 +1880,24 @@
       };
     }
 
+    async function openHelp() {
+      state.helpOpen = true;
+      state.settingsOpen = false;
+      closeMenus();
+      render();
+      if (!state.help && !state.loading.help) {
+        await loadHelp();
+      }
+    }
+
+    function closeHelp() {
+      state.helpOpen = false;
+      render();
+    }
+
     function openSettings() {
       state.settingsOpen = true;
+      state.helpOpen = false;
       syncSettingsDraft();
       closeMenus();
       render();
@@ -1732,6 +1916,82 @@
         ...(state.settingsDraft || currentSettings()),
         [field]: value,
       };
+    }
+
+    function helpCommandRow(command, description) {
+      return `
+        <div class="help-command-row">
+          <code class="help-command-name">${escapeHtml(command)}</code>
+          <div class="help-command-text">${escapeHtml(description)}</div>
+        </div>
+      `;
+    }
+
+    function helpSection(title, rows) {
+      return `
+        <section class="help-section">
+          <div class="help-section-title">${escapeHtml(title)}</div>
+          <div class="help-command-list">
+            ${rows.map((row) => helpCommandRow(row.command, row.description)).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderHelpPanel() {
+      const overlay = document.getElementById('help-overlay');
+      const content = document.getElementById('help-content');
+      const status = document.getElementById('help-status');
+      const aliases = currentHelpAliases();
+
+      status.textContent = helpStatusText();
+
+      if (!state.helpOpen) {
+        overlay.classList.remove('open');
+        overlay.setAttribute('aria-hidden', 'true');
+        content.innerHTML = '';
+        return;
+      }
+
+      const buildRows = [
+        { command: `${aliases.devmode} build`, description: 'Set the repo to build mode. Usually set once, until you switch lanes.' },
+        { command: `${aliases.new} "task name"`, description: 'Create a clean task worktree and branch. The task name is optional.' },
+        { command: aliases.pr, description: 'Run pre-PR checks, commit, push, and open or update the PR.' },
+        { command: aliases.merge, description: 'Merge the PR. In build mode, this hands off to the prod deploy path.' },
+        { command: aliases.clean, description: 'Clean up finished task state after the release is complete.' },
+      ];
+      const releaseRows = [
+        { command: `${aliases.devmode} release`, description: 'Set the repo to release mode. Usually set once, until you switch lanes.' },
+        { command: `${aliases.new} "task name"`, description: 'Create a clean task worktree and branch. The task name is optional.' },
+        { command: aliases.pr, description: 'Run pre-PR checks, commit, push, and open or update the PR.' },
+        { command: aliases.merge, description: 'Merge the PR and record the merged SHA.' },
+        { command: `${aliases.deploy} staging`, description: 'Deploy the merged SHA to staging.' },
+        { command: `${aliases.smoke} staging`, description: 'Run or verify staging smoke checks.' },
+        { command: `${aliases.deploy} prod`, description: 'Promote the same merged SHA to production.' },
+        { command: aliases.clean, description: 'Clean up finished task state after production is verified.' },
+      ];
+      const helpfulRows = [
+        { command: aliases.status, description: 'See where tasks, PRs, deploys, and release gates stand.' },
+        { command: aliases.resume, description: 'Reopen or recover an existing task workspace.' },
+        { command: aliases.doctor, description: 'Diagnose deploy config, probes, and release readiness.' },
+        { command: `${aliases.rollback} prod`, description: 'Roll back production to the last verified-good deploy.' },
+        { command: '/pipelane', description: 'Show the same build and release journey overview in chat.' },
+      ];
+      const webRows = [
+        { command: '/pipelane web', description: 'Open this local Pipelane Board.' },
+        { command: '/pipelane status', description: 'Run the terminal status view without leaving chat.' },
+        { command: '/pipelane update --check', description: 'Check whether Pipelane itself has updates.' },
+      ];
+
+      overlay.classList.add('open');
+      overlay.setAttribute('aria-hidden', 'false');
+      content.innerHTML = `
+        <div class="help-callout">Start with the lane you are in. Build mode optimizes for direct merge-to-production work. Release mode keeps staging, smoke, and production promotion explicit.</div>
+        ${helpSection('Build Journey', buildRows)}
+        ${helpSection('Release Journey', releaseRows)}
+        ${helpSection('Helpful Anytime', helpfulRows)}
+        ${helpSection('Web Commands', webRows)}
+      `;
     }
 
     function renderSettingsPanel() {
@@ -2926,6 +3186,28 @@
       renderHero();
     }
 
+    async function loadHelp() {
+      state.loading.help = true;
+      state.helpNotice = 'Loading slash command guide…';
+      renderHelpPanel();
+      try {
+        const response = await fetchJson('/api/help');
+        state.help = response;
+        state.helpNotice = response.source === 'repo-config' && response.configPath
+          ? `Using slash aliases from ${response.configPath}`
+          : 'Using default slash aliases.';
+        if (response.warning) {
+          state.helpNotice = `Using default slash aliases. ${response.warning}`;
+        }
+      } catch (error) {
+        state.help = { aliases: DEFAULT_HELP_ALIASES, source: 'defaults', configPath: null };
+        state.helpNotice = error instanceof Error ? `Using default slash aliases. ${error.message}` : 'Using default slash aliases.';
+      } finally {
+        state.loading.help = false;
+        renderHelpPanel();
+      }
+    }
+
     async function loadSettings() {
       state.loading.settings = true;
       renderSettingsPanel();
@@ -3292,17 +3574,19 @@
 
     function render() {
       renderSettingsPanel();
+      renderHelpPanel();
       renderHero();
       renderAttention();
       renderActiveTask();
       renderBranchTable();
       renderBranchContextMenu();
       renderDetail();
+      document.getElementById('help-button').disabled = state.loading.help;
       document.getElementById('refresh-button').disabled = state.loading.snapshot;
     }
 
     document.body.addEventListener('click', async (event) => {
-      const target = event.target.closest('[data-branch-open], [data-file-select], [data-action-trigger], [data-confirm-action], [data-detail-close], [data-devmode-toggle], [data-devmode-action], [data-context-action], [data-context-open], [data-settings-open], [data-settings-close], [data-settings-save], [data-settings-revert]');
+      const target = event.target.closest('[data-branch-open], [data-file-select], [data-action-trigger], [data-confirm-action], [data-detail-close], [data-devmode-toggle], [data-devmode-action], [data-context-action], [data-context-open], [data-help-open], [data-help-close], [data-settings-open], [data-settings-close], [data-settings-save], [data-settings-revert]');
       if (!target) {
         if (state.devModeMenuOpen || state.branchContextMenu.open) {
           closeMenus();
@@ -3330,6 +3614,16 @@
         state.devModeMenuOpen = false;
         render();
         await runAction(target.dataset.devmodeAction, 'board');
+        return;
+      }
+
+      if (target.dataset.helpOpen) {
+        await openHelp();
+        return;
+      }
+
+      if (target.dataset.helpClose) {
+        closeHelp();
         return;
       }
 
@@ -3448,6 +3742,11 @@
     });
 
     window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && state.helpOpen) {
+        closeHelp();
+        return;
+      }
+
       if (event.key === 'Escape' && state.settingsOpen) {
         closeSettings(true);
         return;

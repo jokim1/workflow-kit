@@ -70,6 +70,8 @@ npm run pipelane:clean
 
 ### Command surface
 
+- `/pipelane` (journey overview)
+- `/pipelane web` (local web board)
 - `{{ALIAS_DEVMODE}}`
 - `{{ALIAS_NEW}}`
 - `{{ALIAS_RESUME}}`
@@ -97,6 +99,8 @@ Canonical repo-native commands:
 - `npm run pipelane:clean`
 - `npm run pipelane:status`
 - `npm run pipelane:doctor` (add `-- --probe` for live healthchecks, `-- --fix` for the guided wizard)
+- `npm run pipelane:board`
+- `npm run pipelane:update`
 
 ### pipelane + gstack
 

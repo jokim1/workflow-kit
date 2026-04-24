@@ -51,6 +51,10 @@ This reference design deliberately optimizes for operator clarity over generic d
    Branch file lists and patch previews should be lazy. The main snapshot stays lean; details load
    only when the operator clicks into a branch.
 
+7. Contextual help
+   The `?` guide should stay close to the board and mirror the `/pipelane` overview: build
+   journey, release journey, helpful anytime commands, and web commands.
+
 ## Current information architecture
 
 The reference board is structured in this order:
@@ -59,11 +63,25 @@ The reference board is structured in this order:
 2. Attention
 3. Board Context
 4. Branch Ledger
-5. Branch Detail drawer
+5. Help drawer
+6. Branch Detail drawer
 
 ### Hero
 
-Shows the board identity, repo health, mode, base branch, and freshness.
+Shows the board identity, repo health, mode, base branch, freshness, Settings, Refresh, and the
+`?` guide.
+
+### Help drawer
+
+Shows the quick Pipelane guide:
+
+- build journey slash commands
+- release journey slash commands
+- helpful anytime commands
+- `/pipelane web`, `/pipelane status`, and `/pipelane update --check`
+
+The drawer renders configured aliases from the repo when available, falling back to the default
+slash command names only when alias config cannot be loaded.
 
 ### Attention
 
@@ -160,7 +178,8 @@ repo churn.
 If you build a variant on top of this design, preserve these boundaries:
 
 - consume the repo's public `pipelane:api` contract
-- do not read private workflow files directly
+- do not re-infer workflow state from private files; display-only alias labels may come from the
+  repo config for the help guide
 - keep action semantics in the repo contract, not in the UI
 - keep the board local and customizable
 - prefer better operator comprehension over generic dashboard aesthetics
