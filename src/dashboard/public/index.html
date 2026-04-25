@@ -4212,6 +4212,18 @@
         params.title = title;
       }
 
+      if (action.id === 'devmode.release') {
+        const release = state.snapshot?.data?.boardContext?.releaseReadiness || {};
+        if (release.state && release.state !== 'healthy') {
+          const reason = window.prompt('Release override reason', release.reason || 'Release readiness is not green.');
+          if (!reason || !reason.trim()) {
+            return null;
+          }
+          params.override = true;
+          params.reason = reason.trim();
+        }
+      }
+
       return params;
     }
 

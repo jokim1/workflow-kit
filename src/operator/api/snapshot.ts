@@ -414,6 +414,19 @@ export async function buildWorkflowApiSnapshot(cwd: string): Promise<ApiEnvelope
   const boardMessage = mode === 'release'
     ? 'Release mode: promote merged SHA through staging before prod.'
     : 'Build mode: production deploys run automatically after merge.';
+  const releaseReadiness = buildBoardReleaseReadiness({
+    checkedAt,
+    mode,
+    config: context.config,
+    deployConfig,
+    deployRecords: deployState.records,
+    probeState,
+    requestedSurfaces,
+    probeRollup,
+    boardMessage,
+    effectiveOverride: context.modeState.override ?? null,
+    lastOverride: context.modeState.lastOverride ?? null,
+  });
 
   return buildApiEnvelope<SnapshotData>({
     command: 'pipelane.api.snapshot',
@@ -425,19 +438,7 @@ export async function buildWorkflowApiSnapshot(cwd: string): Promise<ApiEnvelope
         baseBranch,
         aliases: context.config.aliases,
         laneOrder: ['Local', 'PR', `Base: ${baseBranch}`, 'Staging', 'Production'],
-        releaseReadiness: buildBoardReleaseReadiness({
-          checkedAt,
-          mode,
-          config: context.config,
-          deployConfig,
-          deployRecords: deployState.records,
-          probeState,
-          requestedSurfaces,
-          probeRollup,
-          boardMessage,
-          effectiveOverride: context.modeState.override ?? null,
-          lastOverride: context.modeState.lastOverride ?? null,
-        }),
+        releaseReadiness,
         activeTask: activeLock
           ? {
             taskSlug: activeLock.taskSlug,
@@ -458,10 +459,41 @@ export async function buildWorkflowApiSnapshot(cwd: string): Promise<ApiEnvelope
       },
       sourceHealth,
       attention,
-      availableActions: [],
+      availableActions: buildBoardActions({ mode, releaseReadiness, checkedAt }),
       branches,
     },
   });
+}
+
+function buildBoardActions(options: {
+  mode: string;
+  releaseReadiness: SnapshotData['boardContext']['releaseReadiness'];
+  checkedAt: string;
+}): ApiActionState[] {
+  if (options.mode === 'release') {
+    return [
+      buildApiActionState({
+        id: 'devmode.build',
+        label: 'Switch to build mode',
+        state: 'awaiting_preflight',
+        reason: 'leave the protected release lane and use the fast build lane',
+        checkedAt: options.checkedAt,
+      }),
+    ];
+  }
+
+  const releaseReady = options.releaseReadiness.state === 'healthy';
+  return [
+    buildApiActionState({
+      id: 'devmode.release',
+      label: 'Switch to release mode',
+      state: releaseReady ? 'awaiting_preflight' : 'blocked',
+      reason: releaseReady
+        ? 'enter the protected release lane'
+        : options.releaseReadiness.reason || 'release readiness must pass, or the switch needs an override reason',
+      checkedAt: options.checkedAt,
+    }),
+  ];
 }
 
 function smokeLaneState(record: SmokeRunRecord | null): LaneState {

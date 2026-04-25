@@ -6168,6 +6168,14 @@ test('api snapshot emits a wire-compatible envelope', () => {
     assert.ok(sourceHealth.find((entry) => entry.name === 'task-locks'));
     assert.ok(Array.isArray(attention));
     assert.ok(Array.isArray(availableActions));
+    assert.deepEqual(
+      availableActions.map((action) => action.id),
+      ['devmode.release'],
+      'snapshot should expose the repo-level mode switch for the board',
+    );
+    assert.equal(availableActions[0].label, 'Switch to release mode');
+    assert.equal(availableActions[0].risky, false);
+    assert.equal(availableActions[0].requiresConfirmation, false);
 
     assert.ok(Array.isArray(branches) && branches.length === 1);
     const [branch] = branches;
@@ -6620,6 +6628,52 @@ test('api action execute: non-risky action runs without a token', () => {
     assert.equal(envelope.ok, true);
     assert.equal(envelope.data.action.risky, false);
     assert.equal(envelope.data.execution.exitCode, 0);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
+test('api action execute: devmode actions switch the repo mode', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt pipelane');
+
+    const releaseResult = runCli([
+      'run',
+      'api',
+      'action',
+      'devmode.release',
+      '--override',
+      '--reason',
+      'board switch fixture',
+      '--execute',
+    ], repoRoot);
+    const releaseEnvelope = JSON.parse(releaseResult.stdout);
+    assert.equal(releaseEnvelope.ok, true);
+    assert.equal(releaseEnvelope.data.execution.result.mode, 'release');
+
+    const releaseSnapshot = JSON.parse(runCli(['run', 'api', 'snapshot'], repoRoot).stdout);
+    assert.equal(releaseSnapshot.data.boardContext.mode, 'release');
+    assert.deepEqual(
+      releaseSnapshot.data.availableActions.map((action) => action.id),
+      ['devmode.build'],
+      'release mode should expose the switch back to build mode',
+    );
+
+    const buildResult = runCli(['run', 'api', 'action', 'devmode.build', '--execute'], repoRoot);
+    const buildEnvelope = JSON.parse(buildResult.stdout);
+    assert.equal(buildEnvelope.ok, true);
+    assert.equal(buildEnvelope.data.execution.result.mode, 'build');
+
+    const buildSnapshot = JSON.parse(runCli(['run', 'api', 'snapshot'], repoRoot).stdout);
+    assert.equal(buildSnapshot.data.boardContext.mode, 'build');
+    assert.deepEqual(
+      buildSnapshot.data.availableActions.map((action) => action.id),
+      ['devmode.release'],
+      'build mode should expose the switch to release mode',
+    );
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
