@@ -102,7 +102,7 @@ is not good enough.
 /doctor                 Diagnose deploy config, probes, and release readiness.
 /rollback prod          Roll production back to the last verified-good deploy.
 /fix                    Fix bugs, review findings, CI failures, and code-quality issues.
-/fix rethink            Plan a bigger codebase restructure before changing code.
+/fix rethink            Audit refactor hotspots and plan a restructure before changing code.
 ```
 
 ## The Pipelane Board
@@ -165,6 +165,12 @@ The command is deliberately strict. It asks for the root cause, checks
 `REPO_GUIDANCE.md` for repo-specific invariants, scans for sibling bugs, and refuses
 cheap shims like swallowing errors or adding one-off special cases without explaining
 the caller that produced the bad state.
+
+`/fix rethink` is the planning-only audit mode for code that has accumulated
+features faster than its original boundaries can hold. It ranks refactor
+hotspots using repo evidence such as recent churn, large or over-broad modules,
+duplicated sibling patterns, and stressed API/schema/CLI/UI boundaries before it
+proposes a migration path.
 
 Use `/fix` when you want the codebase to get healthier, not just quieter.
 

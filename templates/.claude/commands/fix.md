@@ -109,18 +109,27 @@ Informational. No confirm, no block. Rate-limit: one per category per session. *
 
 ## RETHINK MODE
 
-Triggered by `/fix rethink`. Scope is whole-codebase architectural restructure, not a single finding.
+Triggered by `/fix rethink`. Scope is whole-codebase architectural audit and restructure planning, not a single finding.
 
 **Hard gate: produce a written plan, not code. No implementation until the user explicitly approves.**
 
+First run a **hotspot audit**. Ground the audit in repo evidence instead of intuition:
+
+- **Recent churn.** Use `git log --since="30 days ago" --name-only --pretty=format:` and summarize files/modules with repeated commits. If the repo is shallow or has little history, say so and fall back to current-shape evidence.
+- **Feature accretion.** Identify files/modules where unrelated features now share state, branching, config, schemas, UI surfaces, or command flows.
+- **Size and responsibility.** Check large or highly connected files with `wc -l`, import/export references, and nearby tests. Do not treat size alone as proof; explain the responsibility mismatch.
+- **Repeated fixes or sibling patterns.** Search for duplicated logic, parallel conditionals, copied validation, repeated TODOs, and review-fix clusters that indicate the same structural problem keeps returning.
+- **Boundary stress.** Look for APIs, CLI contracts, schemas, auth/session paths, queues, deploy flows, or UI state boundaries that have become pass-through layers or catch-all modules.
+
 Produce:
 
-1. **Drift observations** — concrete file/module references where the codebase has pivoted away from its original architecture.
-2. **Root-cause hypotheses** — structural causes (wrong module boundaries, schema that fought every new feature, leaked abstractions), not symptoms.
-3. **Proposed restructure** — new module boundaries, schema, data flow. Specific enough to review; no platitudes.
-4. **Migration path** — incremental or single cut? What stays stable during migration?
-5. **Risks** — what breaks, what might we miss, which files/flows are most affected.
-6. **Open questions** — where you are assuming something that needs user input.
+1. **Hotspot audit** — ranked candidates with evidence: churn counts when available, representative files, repeated patterns, and why each is or is not worth refactoring now.
+2. **Drift observations** — concrete file/module references where new features have accumulated on top of older boundaries or the codebase has pivoted away from its original architecture.
+3. **Root-cause hypotheses** — structural causes (wrong module boundaries, schema that fought every new feature, leaked abstractions), not symptoms.
+4. **Proposed restructure** — new module boundaries, schema, data flow. Specific enough to review; no platitudes.
+5. **Migration path** — incremental or single cut? What stays stable during migration?
+6. **Risks** — what breaks, what might we miss, which files/flows are most affected.
+7. **Open questions** — where you are assuming something that needs user input.
 
 Do not edit code. If `REPO_GUIDANCE.md` exists, read it first — listed invariants constrain the proposed restructure; deferred items remain deferred unless the user unfreezes them. If a plan-review skill exists (e.g. `plan-eng-review`), note that running it on the output is a good next step. Code changes follow only after explicit user approval, typically via a fresh `/fix` against the approved plan's findings.
 

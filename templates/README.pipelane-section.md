@@ -57,7 +57,7 @@ same merged SHA before production can move.
 {{ALIAS_DOCTOR}}                 Diagnose deploy config, probes, and release readiness.
 {{ALIAS_ROLLBACK}} prod          Roll production back to the last verified-good deploy.
 /fix                             Fix bugs, review findings, CI failures, and code-quality issues.
-/fix rethink                     Plan a larger codebase restructure before changing code.
+/fix rethink                     Audit refactor hotspots and plan a restructure before changing code.
 ```
 
 ### What Each Command Is For

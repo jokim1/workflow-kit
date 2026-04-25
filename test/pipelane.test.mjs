@@ -10814,6 +10814,8 @@ test('setup writes .agents/skills/fix/SKILL.md with Codex frontmatter and shared
     // /fix prompt is built around.
     assert.match(content, /Produce durable, root-cause fixes\./);
     assert.match(content, /## Mode routing/);
+    assert.match(content, /First run a \*\*hotspot audit\*\*/);
+    assert.match(content, /\*\*Feature accretion\.\*\*/);
     assert.match(content, /### Refuse these shims unconditionally/);
     // Claude-specific markers must NOT appear — those live only on the Claude
     // template so re-sync doesn't strip hand-edits there.

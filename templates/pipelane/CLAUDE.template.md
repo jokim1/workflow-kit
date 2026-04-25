@@ -43,7 +43,7 @@ Key routing rules:
 - Code review, check my diff -> `review`
 - Save progress or checkpoint -> `checkpoint`
 - Fix review findings (auto-suggests /fix rethink when churn is high) -> `/fix`
-- Rethink architecture (plan first) -> `/fix rethink`
+- Audit refactor hotspots and rethink architecture (plan first) -> `/fix rethink`
 - Refresh repo guidance -> `/fix refresh-guidance`
 
 {{DEPLOY_CONFIG_SECTION}}
