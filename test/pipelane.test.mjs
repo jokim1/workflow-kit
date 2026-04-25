@@ -3181,6 +3181,117 @@ test('loadWorkflowConfig falls back to .project-workflow.json when .pipelane.jso
   }
 });
 
+test('loadWorkflowConfig self-heals when no .pipelane.json exists, inferring name from package.json', async () => {
+  const repoRoot = createRepo();
+  try {
+    // Fixture has package.json { name: "sample-repo" } but no .pipelane.json
+    // or overlay. loadWorkflowConfig should synthesize a default config from
+    // defaults + package.json name instead of throwing.
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const loaded = stateMod.loadWorkflowConfig(repoRoot);
+    assert.equal(loaded.displayName, 'sample-repo');
+    assert.equal(loaded.projectKey, 'sample-repo');
+    assert.equal(loaded.baseBranch, 'main');
+    assert.equal(loaded.branchPrefix, stateMod.DEFAULT_BRANCH_PREFIX);
+    assert.deepEqual(loaded.aliases, stateMod.DEFAULT_WORKFLOW_ALIASES);
+    // Self-heal must not write the file to disk — consumers who gitignore
+    // .pipelane.json on purpose don't want loads to materialize it.
+    assert.equal(existsSync(path.join(repoRoot, '.pipelane.json')), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('loadWorkflowConfig applies a package.json:pipelane overlay when the file is missing', async () => {
+  const repoRoot = createRepo();
+  try {
+    const packageJsonPath = path.join(repoRoot, 'package.json');
+    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    pkg.pipelane = {
+      baseBranch: 'trunk',
+      displayName: 'Canvas App',
+      aliases: { pr: '/ship' },
+      syncDocs: { readmeSection: false },
+    };
+    writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const loaded = stateMod.loadWorkflowConfig(repoRoot);
+    assert.equal(loaded.displayName, 'Canvas App');
+    assert.equal(loaded.baseBranch, 'trunk');
+    assert.equal(loaded.aliases.pr, '/ship');
+    // Unspecified aliases should inherit the defaults.
+    assert.equal(loaded.aliases.merge, stateMod.DEFAULT_WORKFLOW_ALIASES.merge);
+    assert.equal(loaded.syncDocs?.readmeSection, false);
+    assert.equal(existsSync(path.join(repoRoot, '.pipelane.json')), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('loadWorkflowConfig lets .pipelane.json win over a package.json:pipelane overlay', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    const packageJsonPath = path.join(repoRoot, 'package.json');
+    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    pkg.pipelane = {
+      displayName: 'Overlay App',
+      baseBranch: 'trunk',
+      aliases: { pr: '/ship', merge: '/land' },
+    };
+    writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    const loaded = stateMod.loadWorkflowConfig(repoRoot);
+    // .pipelane.json's displayName/baseBranch/aliases win over the overlay.
+    assert.equal(loaded.displayName, 'Demo App');
+    assert.equal(loaded.baseBranch, 'main');
+    assert.equal(loaded.aliases.pr, '/pr');
+    assert.equal(loaded.aliases.merge, '/merge');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('setup succeeds without a pre-existing .pipelane.json', async () => {
+  const repoRoot = createRepo();
+  try {
+    // No `pipelane init` — just run setup directly. With self-heal, this
+    // should succeed and render CLAUDE.md from the synthesized config
+    // instead of failing closed.
+    const result = runCli(['setup'], repoRoot);
+    assert.equal(result.status, 0, `setup exited ${result.status}: ${result.stderr}`);
+    assert.ok(existsSync(path.join(repoRoot, 'CLAUDE.md')), 'setup should create CLAUDE.md');
+    // .pipelane.json stays un-materialized because setup only reads.
+    assert.equal(existsSync(path.join(repoRoot, '.pipelane.json')), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('patchReadableWorkflowConfig materializes .pipelane.json when it is missing', async () => {
+  const repoRoot = createRepo();
+  try {
+    const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+    assert.equal(existsSync(path.join(repoRoot, '.pipelane.json')), false);
+    const { configPath, isLegacy } = stateMod.patchReadableWorkflowConfig(repoRoot, (raw) => {
+      return { ...raw, smoke: { staging: { command: 'npm run smoke:staging' } } };
+    });
+    assert.equal(isLegacy, false);
+    assert.equal(configPath, path.join(repoRoot, '.pipelane.json'));
+    assert.equal(existsSync(configPath), true);
+    const written = JSON.parse(readFileSync(configPath, 'utf8'));
+    assert.equal(written.smoke.staging.command, 'npm run smoke:staging');
+    // The materialized file carries the synthesized defaults alongside
+    // the patched slice so subsequent loads see a full config.
+    assert.equal(written.displayName, 'sample-repo');
+    assert.equal(written.projectKey, 'sample-repo');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('new and repo-guard work from repos that track only .project-workflow.json', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
@@ -6692,16 +6803,22 @@ test('configure --help prints usage and does not modify CLAUDE.md', () => {
   }
 });
 
-test('configure throws when seeding a missing CLAUDE.md without a .pipelane.json', () => {
+test('configure seeds a fresh CLAUDE.md from the self-healed config without a .pipelane.json', () => {
   const repoRoot = createRepo();
   try {
-    // Deliberately skip `init` — no .pipelane.json present.
-    // CLAUDE.md is also missing. configure must refuse to seed from template
-    // because it has no displayName / aliases to render, matching
-    // setupConsumerRepo's strict invariant.
-    const result = runCli(['configure', '--json', '--platform=fly.io'], repoRoot, {}, true);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /pipelane init/);
+    // Deliberately skip `init` — no .pipelane.json, no overlay in package.json.
+    // With self-heal, configure synthesizes a workable config from the
+    // package.json name + defaults and renders CLAUDE.md from that, rather
+    // than failing closed. Consumers who gitignore `.pipelane.json` can run
+    // configure on a fresh checkout without a prior bootstrap step.
+    const result = runCli(['configure', '--json', '--platform=fly.io'], repoRoot);
+    assert.equal(result.status, 0, `configure exited ${result.status}: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout);
+    assert.equal(parsed.platform, 'fly.io');
+    assert.ok(existsSync(path.join(repoRoot, 'CLAUDE.md')), 'configure should create CLAUDE.md');
+    // Self-heal path must not materialize .pipelane.json — that stays
+    // deferred to mutators that actually need to persist state.
+    assert.equal(existsSync(path.join(repoRoot, '.pipelane.json')), false);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }

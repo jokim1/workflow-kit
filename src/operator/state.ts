@@ -721,11 +721,91 @@ export function resolveReadableConfigPath(repoRoot: string): string | null {
   return null;
 }
 
+// Read a tracked `pipelane` block from the repo's package.json. Consumers who
+// gitignore `.pipelane.json` can persist durable customizations here
+// (aliases, smoke commands, syncDocs opt-outs) so fresh checkouts and new
+// worktrees don't regress to bare defaults. Returns null when package.json
+// is missing, malformed, or has no `pipelane` field.
+export function readPackageJsonOverlay(repoRoot: string): Partial<WorkflowConfig> | null {
+  const packageJsonPath = path.join(repoRoot, 'package.json');
+  if (!existsSync(packageJsonPath)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const pipelaneField = (parsed as Record<string, unknown>).pipelane;
+  if (!pipelaneField || typeof pipelaneField !== 'object' || Array.isArray(pipelaneField)) return null;
+  return pipelaneField as Partial<WorkflowConfig>;
+}
+
+function readPackageJsonName(repoRoot: string): string | null {
+  const packageJsonPath = path.join(repoRoot, 'package.json');
+  if (!existsSync(packageJsonPath)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { name?: unknown };
+    if (typeof parsed.name !== 'string') return null;
+    const trimmed = parsed.name.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
+// Layer a stack of Partial<WorkflowConfig>s on top of a full base, with deep
+// merge for the nested record-valued fields pipelane treats compositionally
+// (aliases, syncDocs, smoke, etc.). Later overlays win. The output is a
+// Partial — pass it through `normalizeWorkflowConfig` to produce a full
+// config. Arrays and primitive fields use last-write-wins; we deliberately
+// don't concatenate `surfaces` / `prePrChecks` / `prPathDenyList` because
+// consumers expect the overlay value to replace the default, not extend it.
+function mergeWorkflowLayers(
+  base: WorkflowConfig,
+  ...overlays: Array<Partial<WorkflowConfig> | null | undefined>
+): Partial<WorkflowConfig> {
+  let current: Partial<WorkflowConfig> = { ...base };
+  for (const overlay of overlays) {
+    if (!overlay || typeof overlay !== 'object' || Array.isArray(overlay)) continue;
+    const next: Partial<WorkflowConfig> = { ...current, ...overlay };
+    next.aliases = { ...(current.aliases ?? {} as Record<WorkflowCommand, string>), ...(overlay.aliases ?? {}) } as Record<WorkflowCommand, string>;
+    if (overlay.syncDocs) next.syncDocs = { ...current.syncDocs, ...overlay.syncDocs };
+    if (overlay.checks) next.checks = { ...current.checks, ...overlay.checks };
+    if (overlay.smoke) next.smoke = { ...current.smoke, ...overlay.smoke };
+    if (overlay.surfacePathMap) next.surfacePathMap = { ...current.surfacePathMap, ...overlay.surfacePathMap };
+    if (overlay.buildMode) next.buildMode = { ...current.buildMode, ...overlay.buildMode } as WorkflowConfig['buildMode'];
+    if (overlay.releaseMode) next.releaseMode = { ...current.releaseMode, ...overlay.releaseMode } as WorkflowConfig['releaseMode'];
+    current = next;
+  }
+  return current;
+}
+
+// Build a usable WorkflowConfig from repo-derived signals alone, no
+// `.pipelane.json` required. Used for the self-heal path: `pipelane setup`
+// on a fresh checkout of a consumer that gitignores `.pipelane.json`, or
+// that has only a `package.json:pipelane` overlay. projectKey/displayName
+// fall back through: explicit override > package.json name > repo basename.
+export function synthesizeWorkflowConfig(repoRoot: string): WorkflowConfig {
+  const overlay = readPackageJsonOverlay(repoRoot);
+  const overlayName = typeof overlay?.displayName === 'string' ? overlay.displayName.trim() : '';
+  const inferredName = overlayName || readPackageJsonName(repoRoot) || path.basename(repoRoot);
+  const overlayKey = typeof overlay?.projectKey === 'string' ? overlay.projectKey.trim() : '';
+  const projectKey = overlayKey || inferProjectKey(inferredName);
+  const base = defaultWorkflowConfig(projectKey, inferredName);
+  const merged = mergeWorkflowLayers(base, overlay);
+  return normalizeWorkflowConfig(merged);
+}
+
 export function loadWorkflowConfig(repoRoot: string): WorkflowConfig {
   const configPath = resolveReadableConfigPath(repoRoot);
 
+  // Self-heal: when neither `.pipelane.json` nor the legacy file is present,
+  // derive a workable config from defaults + optional package.json overlay.
+  // Callers that need to mutate the file (e.g. `smoke setup`) materialize it
+  // via `patchReadableWorkflowConfig`, which writes on first patch.
   if (!configPath) {
-    throw new Error(`No ${CONFIG_FILENAME} or ${LEGACY_CONFIG_FILENAME} found in ${repoRoot}. Run pipelane bootstrap first.`);
+    return synthesizeWorkflowConfig(repoRoot);
   }
 
   let parsed: Partial<WorkflowConfig>;
@@ -735,7 +815,22 @@ export function loadWorkflowConfig(repoRoot: string): WorkflowConfig {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Malformed ${path.basename(configPath)} at ${configPath}: ${detail}. Fix the JSON by hand before rerunning.`);
   }
-  return normalizeWorkflowConfig(parsed);
+
+  // Layer defaults < package.json overlay < tracked file. The file keeps
+  // winning for existing consumers (no behavior change when it's complete),
+  // and a partial file — e.g. after a future `smoke setup --write-to=file`
+  // that only persists the smoke slice — still produces a full config by
+  // pulling the rest from overlay/defaults.
+  const overlay = readPackageJsonOverlay(repoRoot);
+  const overlayName = typeof overlay?.displayName === 'string' ? overlay.displayName.trim() : '';
+  const fileName = typeof parsed.displayName === 'string' ? parsed.displayName.trim() : '';
+  const inferredName = fileName || overlayName || readPackageJsonName(repoRoot) || path.basename(repoRoot);
+  const overlayKey = typeof overlay?.projectKey === 'string' ? overlay.projectKey.trim() : '';
+  const fileKey = typeof parsed.projectKey === 'string' ? parsed.projectKey.trim() : '';
+  const projectKey = fileKey || overlayKey || inferProjectKey(inferredName);
+  const base = defaultWorkflowConfig(projectKey, inferredName);
+  const merged = mergeWorkflowLayers(base, overlay, parsed);
+  return normalizeWorkflowConfig(merged);
 }
 
 export function normalizeWorkflowConfig(raw: Partial<WorkflowConfig>): WorkflowConfig {
@@ -947,9 +1042,17 @@ export function patchReadableWorkflowConfig(
   repoRoot: string,
   patcher: (raw: Record<string, unknown>) => Record<string, unknown>,
 ): { configPath: string; isLegacy: boolean } {
-  const configPath = resolveReadableConfigPath(repoRoot);
+  let configPath = resolveReadableConfigPath(repoRoot);
+  // Self-heal: if no file is tracked (consumer gitignored `.pipelane.json`
+  // or never ran `pipelane init`), materialize one from synthesized defaults
+  // + any `package.json:pipelane` overlay before patching. The patcher then
+  // sees a complete JSON object and writes its slice on top. This is the
+  // only write-to-disk path in the self-heal flow — `loadWorkflowConfig`
+  // intentionally stays read-only so the gitignore promise holds until a
+  // mutation actually needs to persist.
   if (!configPath) {
-    throw new Error(`No ${CONFIG_FILENAME} or ${LEGACY_CONFIG_FILENAME} found in ${repoRoot}. Run pipelane bootstrap first.`);
+    writeWorkflowConfig(repoRoot, synthesizeWorkflowConfig(repoRoot));
+    configPath = resolveConfigPath(repoRoot);
   }
   const raw = readFileSync(configPath, 'utf8');
   let parsed: Record<string, unknown>;

@@ -83,15 +83,21 @@ Slash commands are the normal Claude/Codex interface. Repo-native scripts exist
 under the hood, but workflow guidance should point operators at the slash
 aliases above.
 
-The default alias set can be changed in `.pipelane.json`. If aliases change,
-rerun setup and reopen Claude/Codex so the new names are picked up. Aliases
-must be unique, and setup fails closed if an alias would overwrite an unrelated
+The default alias set can be changed in `.pipelane.json` — or in a tracked
+`pipelane` block in `package.json` if you'd rather gitignore `.pipelane.json`
+and keep customizations with the rest of your project config. When both are
+present, `.pipelane.json` wins field-by-field. If aliases change, rerun setup
+and reopen Claude/Codex so the new names are picked up. Aliases must be
+unique, and setup fails closed if an alias would overwrite an unrelated
 command.
 
 ### What Each User Still Needs To Do
 
 - One repo maintainer runs `pipelane bootstrap --project "<name>"`, reviews
-  `.pipelane.json`, and commits the tracked Pipelane files.
+  `.pipelane.json` (or a `pipelane` block in `package.json`), and commits the
+  tracked Pipelane files. Consumers who prefer to gitignore `.pipelane.json`
+  can declare the `pipelane` overlay in `package.json` and skip `init` — fresh
+  checkouts synthesize the config from that overlay.
 - Each Claude user can run `pipelane install-claude` once per machine for the
   global `/init-pipelane` bootstrap command, then pulls the repo and reopens
   Claude if command files or aliases changed.

@@ -208,9 +208,15 @@ Surfaces:
 
 ## Supporting Files
 
-Tracked:
+Tracked (choose one shape for the workflow contract):
 
-- `.pipelane.json`
+- `.pipelane.json` — the default. Full workflow contract in one file.
+- `package.json` `"pipelane"` overlay — for consumers that gitignore
+  `.pipelane.json` and want customizations (aliases, smoke commands,
+  `syncDocs`) to survive fresh checkouts without a re-bootstrap.
+
+Always tracked:
+
 - `AGENTS.md`
 - `.claude/commands/*`
 - `.agents/skills/*`
@@ -221,9 +227,22 @@ Local-only:
 
 - `CLAUDE.md`
 
-## Required `.pipelane.json`
+## Workflow contract: `.pipelane.json` or `package.json:pipelane`
 
-This repo tracks `.pipelane.json` as the workflow contract.
+Pipelane resolves the workflow contract by layering:
+
+1. Built-in defaults (from `defaultWorkflowConfig`).
+2. `package.json:pipelane` overlay (tracked, optional).
+3. `.pipelane.json` (tracked or gitignored, optional).
+
+The file wins field-by-field over the overlay, which wins over defaults. If
+neither file nor overlay is present, `pipelane setup` self-heals by
+synthesizing a config from the repo name plus defaults — no `pipelane
+bootstrap` re-run required on fresh worktrees.
+
+Runtime mutations (`{{ALIAS_SMOKE}} setup`, `pipelane configure`) write
+to `.pipelane.json`. If it doesn't exist yet, the mutator materializes
+it from the synthesized config at write time.
 
 ### Optional `syncDocs` opt-outs
 
@@ -279,7 +298,8 @@ This repo tracks `AGENTS.md` as the repo policy surface for pipelane.
 ### One repo maintainer
 
 1. run `pipelane bootstrap --project "{{DISPLAY_NAME}}"` or `npx -y pipelane@github:jokim1/pipelane#main bootstrap --project "{{DISPLAY_NAME}}"`
-2. review `.pipelane.json`, especially `aliases`
+2. review `.pipelane.json`, especially `aliases` (or the `pipelane` block in
+   `package.json` if using the gitignored-config flow)
 3. commit the tracked Pipelane files
 
 ### Each Claude user
