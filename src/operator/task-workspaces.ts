@@ -160,7 +160,9 @@ export function bootstrapWorktreeNodeModulesIfNeeded(cwd: string): WorktreeBoots
   if (result === SHARED_NODE_MODULES_NPMCI_WARNING) {
     return {
       kind: 'symlinked',
-      message: `[pipelane] Linked node_modules into worktree from shared repo at ${sharedRepoRoot}.`,
+      message:
+        `[pipelane] Linked node_modules into worktree from shared repo at ${sharedRepoRoot}.\n` +
+        `[pipelane] ${SHARED_NODE_MODULES_NPMCI_WARNING}`,
     };
   }
   return { kind: 'error', message: result };

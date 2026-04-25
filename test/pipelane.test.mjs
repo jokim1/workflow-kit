@@ -3438,6 +3438,11 @@ test('bootstrapWorktreeNodeModulesIfNeeded symlinks an externally-created worktr
     const result = taskWorkspaces.bootstrapWorktreeNodeModulesIfNeeded(worktreePath);
     assert.equal(result.kind, 'symlinked');
     assert.match(result.message, /Linked node_modules/);
+    // The success message must also surface the npm-wipes-shared-deps warning —
+    // the audience for auto-bootstrap (agents, fresh users) is exactly who
+    // needs this safety note. `pipelane:new` already does this via its
+    // workspace output; the auto-bootstrap path must not silently drop it.
+    assert.match(result.message, /Do NOT run `npm ci` or `npm install`/);
 
     const linkedNodeModules = path.join(worktreePath, 'node_modules');
     assert.ok(lstatSync(linkedNodeModules).isSymbolicLink());
@@ -3523,6 +3528,10 @@ test('CLI auto-bootstraps node_modules in an externally-created worktree before 
     assert.ok(lstatSync(linkedNodeModules).isSymbolicLink());
     assert.equal(realpathSync(linkedNodeModules), realpathSync(path.join(repoRoot, 'node_modules')));
     assert.match(result.stderr, /\[pipelane\] Linked node_modules/);
+    // npm-wipes-shared-deps warning must reach stderr too, not just the
+    // programmatic result — this is the safety note the auto-bootstrap
+    // audience needs most.
+    assert.match(result.stderr, /Do NOT run `npm ci` or `npm install`/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
