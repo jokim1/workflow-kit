@@ -3677,6 +3677,7 @@
         return `
           <tr class="${branch.name === selectedBranchName && state.detailOpen ? 'selected' : ''}">
             <td class="branch-sticky-cell">
+              <button class="branch-column-resizer branch-column-resizer-body" type="button" data-branch-resize tabindex="-1" aria-hidden="true"></button>
               <div class="branch-name">
                 <strong>${escapeHtml(branch.name)}</strong>
                 <div class="branch-note">${escapeHtml(branch.note || (branch.task?.taskSlug ? `Task ${branch.task.taskSlug}` : 'No branch note.'))}</div>
