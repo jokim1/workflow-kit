@@ -11,12 +11,8 @@ import {
   type DeployConfig,
 } from '../release-gate.ts';
 import {
-  CONFIG_FILENAME,
-  LEGACY_CONFIG_FILENAME,
   loadWorkflowConfig,
-  resolveReadableConfigPath,
   resolveRepoRoot,
-  type WorkflowConfig,
 } from '../state.ts';
 
 export interface ConfigureOptions {
@@ -163,7 +159,10 @@ export async function handleConfigure(cwd: string, argv: string[]): Promise<Conf
   if (existsSync(claudePath)) {
     markdown = readFileSync(claudePath, 'utf8');
   } else {
-    markdown = renderClaudeMdFromTemplate(loadWorkflowConfigOrThrow(repoRoot));
+    // `loadWorkflowConfig` self-heals from defaults + `package.json:pipelane`
+    // overlay when `.pipelane.json` is absent, so `configure` now works on
+    // overlay-only consumers without needing `pipelane init` first.
+    markdown = renderClaudeMdFromTemplate(loadWorkflowConfig(repoRoot));
     createdClaude = true;
   }
 
@@ -196,18 +195,6 @@ export async function handleConfigure(cwd: string, argv: string[]): Promise<Conf
   }
 
   return { repoRoot, claudePath, createdClaude, config: finalConfig };
-}
-
-// Matches setupConsumerRepo's strict invariant: configure cannot seed a fresh
-// CLAUDE.md without a .pipelane.json to render template variables
-// (DISPLAY_NAME, ALIAS_*, DEPLOY_WORKFLOW_NAME) against. An operator who hits
-// this error ran configure before init; the fix is to run `pipelane init` first.
-function loadWorkflowConfigOrThrow(repoRoot: string): WorkflowConfig {
-  const configPath = resolveReadableConfigPath(repoRoot);
-  if (!configPath) {
-    throw new Error(`No ${CONFIG_FILENAME} or ${LEGACY_CONFIG_FILENAME} found in ${repoRoot}. Run \`pipelane init\` first to seed CLAUDE.md.`);
-  }
-  return loadWorkflowConfig(repoRoot);
 }
 
 function applyFlagOverrides(base: DeployConfig, options: ConfigureOptions): DeployConfig {

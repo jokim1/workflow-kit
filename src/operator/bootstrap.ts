@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { resolveReadableConfigPath, resolveRepoRoot, runCommandCapture } from './state.ts';
+import { readPackageJsonOverlay, resolveReadableConfigPath, resolveRepoRoot, runCommandCapture } from './state.ts';
 import { resolvePipelaneInstallSpec } from './install-source.ts';
 
 export interface BootstrapOptions {
@@ -77,30 +77,36 @@ function parseSetupOutput(stdout: string): { createdClaude: boolean; codexSkills
 
 function readDisplayName(repoRoot: string): string {
   const configPath = resolveReadableConfigPath(repoRoot);
-  if (!configPath) {
-    return path.basename(repoRoot);
+  if (configPath) {
+    try {
+      const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as { displayName?: string };
+      const fromFile = parsed.displayName?.trim();
+      if (fromFile) return fromFile;
+    } catch {
+      // fall through to overlay / basename
+    }
   }
-
-  try {
-    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as { displayName?: string };
-    return parsed.displayName?.trim() || path.basename(repoRoot);
-  } catch {
-    return path.basename(repoRoot);
-  }
+  const overlay = readPackageJsonOverlay(repoRoot);
+  const fromOverlay = typeof overlay?.displayName === 'string' ? overlay.displayName.trim() : '';
+  if (fromOverlay) return fromOverlay;
+  return path.basename(repoRoot);
 }
 
 function readBaseBranch(repoRoot: string): string {
   const configPath = resolveReadableConfigPath(repoRoot);
-  if (!configPath) {
-    return 'main';
+  if (configPath) {
+    try {
+      const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as { baseBranch?: string };
+      const fromFile = parsed.baseBranch?.trim();
+      if (fromFile) return fromFile;
+    } catch {
+      // fall through to overlay / default
+    }
   }
-
-  try {
-    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as { baseBranch?: string };
-    return parsed.baseBranch?.trim() || 'main';
-  } catch {
-    return 'main';
-  }
+  const overlay = readPackageJsonOverlay(repoRoot);
+  const fromOverlay = typeof overlay?.baseBranch === 'string' ? overlay.baseBranch.trim() : '';
+  if (fromOverlay) return fromOverlay;
+  return 'main';
 }
 
 export function collectBootstrapWarnings(repoRoot: string): string[] {
@@ -156,7 +162,13 @@ export function parseBootstrapArgs(argv: string[]): BootstrapOptions {
 
 export function runBootstrap(cwd: string, options: BootstrapOptions): BootstrapResult {
   const repoRoot = resolveRepoRoot(cwd, true);
-  const initializedRepo = !resolveReadableConfigPath(repoRoot);
+  // Treat the repo as already pipelane-enabled when either the tracked
+  // config file exists OR a `pipelane` overlay is declared in
+  // `package.json`. The overlay case lets consumers who gitignore
+  // `.pipelane.json` skip the file-writing `init` step on every fresh
+  // worktree — `pipelane setup` now self-heals from the overlay.
+  const hasOverlay = readPackageJsonOverlay(repoRoot) !== null;
+  const initializedRepo = !resolveReadableConfigPath(repoRoot) && !hasOverlay;
   const projectName = inferProjectName(repoRoot, options.projectName);
 
   let installedPackage = false;
