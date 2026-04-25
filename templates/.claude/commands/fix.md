@@ -98,11 +98,11 @@ Prefix each load-bearing decision in the diff explanation. Emit at least `[fix] 
 
 ### Post-fix hints
 
-Informational. No confirm, no block. Rate-limit: one per category per session.
+Informational. No confirm, no block. Rate-limit: one per category per session. **Emit the hint string verbatim** — do not paraphrase, shorten, or summarize. The wording is load-bearing because it explains what happened and what to do next.
 
 - **Drift.** For each modified file, run `git log --since="30 days ago" --oneline -- <file>` and count. Read `Drift-hint threshold` from `REPO_GUIDANCE.md` (default: `20 commits / 30 days`). If any touched file exceeds, is not in `Drift-hint ignore`, and is not in `Deferred / don't-touch`, emit: "&lt;file&gt; has &lt;N&gt; commits in 30 days. Consider `/fix rethink`." Skip if `REPO_GUIDANCE.md` is missing entirely; scaffold-only still allows it.
 - **Missing-file** (no REPO_GUIDANCE.md): "No REPO_GUIDANCE.md at the repo root. Run `/fix refresh-guidance` to start building invariants."
-- **Scaffold-only** (template-shape detection tripped): "REPO_GUIDANCE.md is still the default scaffold. Run `/fix refresh-guidance` to capture a few invariants."
+- **Scaffold-only** (template-shape detection tripped): "REPO_GUIDANCE.md still contains template placeholders (`<...>`) in most sections, so /fix ran without repo-specific invariants. Run `/fix refresh-guidance` to replace them with real project rules — future /fix runs will follow them."
 - **Guidance-gap.** Fire only when the fix exposed a concrete, specific, novel invariant worth documenting (e.g. same pattern in 3+ places not documented, or a non-obvious repo rule that would have saved the fix). Format: "This fix exposed a pattern worth adding to REPO_GUIDANCE.md: &lt;one-sentence description&gt;. Run `/fix refresh-guidance` to capture it." Suppress vague ("codebase is complex") or duplicative observations.
 
 ---
