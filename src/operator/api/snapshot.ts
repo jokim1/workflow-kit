@@ -1265,6 +1265,7 @@ function buildStaleBaseIssue(options: {
     source: 'git',
     blocking: false,
     lane: 'base',
+    action: 'git.catchupBase',
   });
 }
 
