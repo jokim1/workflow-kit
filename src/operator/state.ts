@@ -358,6 +358,7 @@ export interface SmokeRunnerCheckResult {
   status: SmokeRunStatus;
   attempts?: Array<{ attempt: number; status: SmokeRunStatus }>;
   artifacts?: SmokeArtifacts;
+  tests?: { passed: number; total: number };
 }
 
 export interface SmokeRunnerResultContract {
@@ -388,6 +389,7 @@ export interface SmokeCheckResult {
   attempts: Array<{ attempt: number; status: SmokeRunStatus }>;
   artifacts?: SmokeArtifacts;
   cohorts?: string[];
+  tests?: { passed: number; total: number };
 }
 
 export interface SmokeRunRecord {
