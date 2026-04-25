@@ -131,7 +131,11 @@ function defaultDashboardSettings(repoRoot: string): DashboardSettings {
 function dashboardSettingsPath(repoRoot: string): string {
   const slug = repoDashboardSlug(repoRoot);
   const hash = createHash('sha1').update(path.resolve(repoRoot)).digest('hex').slice(0, 8);
-  return path.join(os.homedir(), '.pipelane', 'dashboard', `${slug}-${hash}.json`);
+  return path.join(dashboardStateRoot(), `${slug}-${hash}.json`);
+}
+
+function dashboardStateRoot(): string {
+  return process.env.PIPELANE_DASHBOARD_HOME || path.join(os.homedir(), '.pipelane', 'dashboard');
 }
 
 function readDashboardSettings(repoRoot: string, settingsPath = dashboardSettingsPath(repoRoot)): DashboardSettings {

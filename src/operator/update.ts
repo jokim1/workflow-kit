@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { stopDashboardForRepo } from '../dashboard/launcher.ts';
 import { detectSetupDrift, formatSetupResult, type SetupDrift, setupConsumerRepo } from './docs.ts';
 import { PIPELANE_GITHUB_URL, PIPELANE_REPO_SLUG, resolvePipelaneInstallSpec } from './install-source.ts';
 import { resolveRepoRoot, runCommandCapture } from './state.ts';
@@ -96,6 +97,7 @@ export async function runUpdate(cwd: string, options: UpdateOptions): Promise<Up
   if (!options.json) process.stdout.write(`${summary}\n`);
 
   installLatest(repoRoot);
+  const boardStop = await stopDashboardForRepo(repoRoot);
 
   const after = collectUpdateStatus(repoRoot);
   const tail = after.upToDate
@@ -118,6 +120,9 @@ export async function runUpdate(cwd: string, options: UpdateOptions): Promise<Up
   }
 
   process.stdout.write(`${message}\n`);
+  if (boardStop.stopped) {
+    process.stdout.write(`Stopped existing Pipelane Board (PID ${boardStop.pid}) so the next board start uses the updated package.\n`);
+  }
   emitDriftHint(driftResult);
 
   let ranSetup = false;

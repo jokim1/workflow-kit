@@ -13,12 +13,22 @@ interface HealthResult {
   payload?: Record<string, unknown>;
 }
 
+export interface DashboardStopResult {
+  stopped: boolean;
+  pid: number | null;
+  reason: string;
+}
+
 function pidDir(): string {
-  return path.join(os.homedir(), '.pipelane', 'dashboard', 'pids');
+  return path.join(dashboardStateRoot(), 'pids');
 }
 
 function logDir(): string {
-  return path.join(os.homedir(), '.pipelane', 'dashboard', 'logs');
+  return path.join(dashboardStateRoot(), 'logs');
+}
+
+function dashboardStateRoot(): string {
+  return process.env.PIPELANE_DASHBOARD_HOME || path.join(os.homedir(), '.pipelane', 'dashboard');
 }
 
 function slugHash(repoRoot: string): string {
@@ -217,6 +227,41 @@ function stopExistingDashboard(pid: number | null, repoRoot: string): boolean {
   } catch {
     return false;
   }
+}
+
+export async function stopDashboardForRepo(repoRoot: string): Promise<DashboardStopResult> {
+  const options = getDashboardOptions([], repoRoot, { allowNoOpen: true });
+  const health = await probeHealth(options.host, options.port, 500);
+  const runningRepoRoot = health.ok ? healthRepoRoot(health) : '';
+  const healthReportedPid = health.ok && (!runningRepoRoot || runningRepoRoot === path.resolve(options.repoRoot))
+    ? healthPid(health)
+    : null;
+  const storedPid = readPidFile(options.repoRoot);
+  const pid = healthReportedPid ?? storedPid;
+
+  if (runningRepoRoot && runningRepoRoot !== path.resolve(options.repoRoot)) {
+    return {
+      stopped: false,
+      pid: null,
+      reason: `port ${options.port} is serving ${runningRepoRoot}, not ${path.resolve(options.repoRoot)}`,
+    };
+  }
+
+  if (!pid) {
+    return { stopped: false, pid: null, reason: 'no board pid found' };
+  }
+
+  if (!isProcessAlive(pid)) {
+    clearPidFile(options.repoRoot);
+    return { stopped: false, pid, reason: 'board pid was stale' };
+  }
+
+  if (stopExistingDashboard(pid, options.repoRoot)) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    return { stopped: true, pid, reason: 'board stopped' };
+  }
+
+  return { stopped: false, pid, reason: 'board process could not be stopped' };
 }
 
 async function runStart(argv: string[], cwd: string): Promise<void> {

@@ -5,6 +5,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer as createNetServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -293,6 +294,55 @@ async function getFreePort() {
   server.close();
   await once(server, 'close');
   return port;
+}
+
+function isPidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForChildExit(child, timeoutMs = 2000) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await Promise.race([
+    once(child, 'exit'),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+function writeDashboardSettingsForTest(homeDir, repoRoot, patch) {
+  const name = path.basename(path.resolve(repoRoot)) || 'repo';
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
+  const hash = createHash('sha1').update(path.resolve(repoRoot)).digest('hex').slice(0, 8);
+  const dir = homeDir;
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, `${slug}-${hash}.json`),
+    JSON.stringify({
+      boardTitle: `${name} Pipelane`,
+      boardSubtitle: 'test board',
+      preferredPort: patch.preferredPort,
+      autoRefreshSeconds: 30,
+    }, null, 2) + '\n',
+    'utf8',
+  );
+}
+
+function writeDashboardPidForTest(homeDir, repoRoot, pid) {
+  const name = path.basename(path.resolve(repoRoot)) || 'repo';
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
+  let legacyHash = 0;
+  const absolute = path.resolve(repoRoot);
+  for (let index = 0; index < absolute.length; index += 1) {
+    legacyHash = (legacyHash * 31 + absolute.charCodeAt(index)) | 0;
+  }
+  const dir = path.join(homeDir, 'pids');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, `${slug}-${Math.abs(legacyHash).toString(16).slice(0, 8)}.pid`), `${pid}\n`, 'utf8');
 }
 
 async function startRuntimeMarkerServer(handler) {
@@ -6221,6 +6271,32 @@ if (args[0] === 'api' && /compare/.test(args[1] || '')) {
 process.stderr.write('unsupported fake gh call: ' + args.join(' '));
 process.exit(1);
 `, { mode: 0o755, encoding: 'utf8' });
+
+  const npmPath = path.join(binDir, 'npm');
+  writeFileSync(npmPath, `#!/usr/bin/env node
+const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args[0] === 'install') {
+  const root = process.cwd();
+  const lockPath = path.join(root, 'package-lock.json');
+  const lock = existsSync(lockPath) ? JSON.parse(readFileSync(lockPath, 'utf8')) : { lockfileVersion: 3, packages: {} };
+  lock.packages ||= {};
+  lock.packages['node_modules/pipelane'] = {
+    ...(lock.packages['node_modules/pipelane'] || {}),
+    version: '0.2.0',
+    resolved: 'git+ssh://git@github.com/jokim1/pipelane.git#${latestSha}',
+  };
+  writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\\n');
+  const pkgDir = path.join(root, 'node_modules', 'pipelane');
+  mkdirSync(pkgDir, { recursive: true });
+  writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name: 'pipelane', version: '0.2.0' }, null, 2) + '\\n');
+  process.stdout.write('changed 1 package\\n');
+  process.exit(0);
+}
+process.stderr.write('unsupported fake npm call: ' + args.join(' '));
+process.exit(1);
+`, { mode: 0o755, encoding: 'utf8' });
 }
 
 function writeFakeConsumer(consumerRoot, { installedVersion, installedSha }) {
@@ -6305,6 +6381,57 @@ test('update --check reports the commit list when behind', () => {
   } finally {
     rmSync(consumerRoot, { recursive: true, force: true });
     rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+test('update stops a running board for the updated repo after install', async () => {
+  const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-update-consumer-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-update-bin-'));
+  const homeDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-update-home-'));
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  const port = await getFreePort();
+  const resolvedConsumerRoot = realpathSync(consumerRoot);
+  const dashboardChild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  const fakeServer = createHttpServer((req, res) => {
+    if (req.url === '/api/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, repoRoot: resolvedConsumerRoot, pid: dashboardChild.pid }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  fakeServer.listen(port, '127.0.0.1');
+  await once(fakeServer, 'listening');
+
+  try {
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    makeFakeUpdateBin(binDir, { latestSha: newSha });
+    writeDashboardSettingsForTest(homeDir, resolvedConsumerRoot, { preferredPort: port });
+    writeDashboardPidForTest(homeDir, resolvedConsumerRoot, dashboardChild.pid);
+
+    const result = spawnSync('node', [CLI_PATH, 'update'], {
+      cwd: consumerRoot,
+      env: { ...process.env, PIPELANE_DASHBOARD_HOME: homeDir, PORT: String(port), PATH: `${binDir}:${process.env.PATH}` },
+      encoding: 'utf8',
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Stopped existing Pipelane Board/);
+    await waitForChildExit(dashboardChild);
+    assert.equal(isPidAlive(dashboardChild.pid), false, 'expected update to stop the existing board process');
+  } finally {
+    fakeServer.close();
+    await once(fakeServer, 'close').catch(() => undefined);
+    if (isPidAlive(dashboardChild.pid)) {
+      dashboardChild.kill();
+    }
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(homeDir, { recursive: true, force: true });
   }
 });
 
