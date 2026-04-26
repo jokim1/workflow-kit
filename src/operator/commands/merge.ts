@@ -1,18 +1,40 @@
-import { formatWorkflowCommand, printResult, resolveWorkflowContext, runCommandCapture, runGh, runGit, savePrRecord, type ParsedOperatorArgs } from '../state.ts';
-import { buildSmokeHandoffMessage, ensureTaskLockMatchesCurrent, inferActiveTaskLock, loadPrForBranch, pollForMergedSha, setNextAction, watchPrChecks } from './helpers.ts';
+import {
+  formatWorkflowCommand,
+  loadTaskLock,
+  printResult,
+  resolveWorkflowContext,
+  runCommandCapture,
+  runGh,
+  runGit,
+  savePrRecord,
+  slugifyTaskName,
+  type ParsedOperatorArgs,
+  type TaskLock,
+  type WorkflowContext,
+} from '../state.ts';
+import {
+  buildSmokeHandoffMessage,
+  deriveTaskSlugFromPr,
+  ensureTaskLockMatchesCurrent,
+  inferActiveTaskLock,
+  loadOpenPrForBranch,
+  loadPrByNumber,
+  parsePrNumberFlag,
+  pollForMergedSha,
+  resolveCommandSurfaces,
+  setNextAction,
+  type LivePr,
+  watchPrChecks,
+} from './helpers.ts';
 import { dispatchDeploy } from './deploy.ts';
 
 export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Promise<void> {
   const context = resolveWorkflowContext(cwd);
-  const { taskSlug, lock } = inferActiveTaskLock(context, parsed.flags.task);
-  ensureTaskLockMatchesCurrent(context, lock);
-
-  const branchName = runGit(context.repoRoot, ['branch', '--show-current']) ?? '';
+  const mergeContext = resolveMergeCommandContext(context, parsed);
+  const { taskSlug, lock, prBranchName, pr, surfaces } = mergeContext;
+  const currentBranchName = runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim() ?? '';
   const currentHeadSha = runGit(context.repoRoot, ['rev-parse', '--verify', 'HEAD'], true)?.trim() ?? '';
-  const pr = loadPrForBranch(context.repoRoot, branchName);
-  if (!pr) {
-    throw new Error(`No pull request found for branch ${branchName}. Run ${formatWorkflowCommand(context.config, 'pr')} first.`);
-  }
+  assertPrIsOpenForMerge(pr);
 
   watchPrChecks(context.repoRoot, pr.number);
   runGh(context.repoRoot, ['pr', 'merge', String(pr.number), '--squash']);
@@ -25,7 +47,7 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
   const mergedSha = merged.sha;
 
   savePrRecord(context.commonDir, context.config, taskSlug, {
-    branchName,
+    branchName: prBranchName,
     title: merged.title,
     number: merged.number,
     url: merged.url,
@@ -52,7 +74,9 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
         ? `Remote base matches the merged SHA.`
         : `Remote base does not match the merged SHA yet: ${refreshedOriginSha}`
       : `Remote base SHA is unavailable after merge.`,
-    `Current worktree branch remains ${branchName}.`,
+    currentBranchName
+      ? `Current worktree branch remains ${currentBranchName}.`
+      : 'Current worktree branch could not be resolved.',
     currentHeadSha
       ? `Current worktree HEAD remains ${currentHeadSha}.`
       : 'Current worktree HEAD could not be resolved.',
@@ -65,8 +89,9 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
     const deploy = await dispatchDeploy(cwd, parsed, {
       environment: 'prod',
       explicitTask: taskSlug,
-      explicitSurfaces: lock.surfaces,
+      explicitSurfaces: surfaces,
       async: true,
+      allowMissingTaskLock: lock === null,
     });
     lines.push(`Production deploy dispatched via ${deploy.workflowName}.`);
     if (deploy.workflowRunUrl) {
@@ -100,4 +125,70 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
     mergedSha,
     message: lines.join('\n'),
   });
+}
+
+interface MergeCommandContext {
+  taskSlug: string;
+  lock: TaskLock | null;
+  prBranchName: string;
+  pr: LivePr;
+  surfaces: string[];
+}
+
+function resolveMergeCommandContext(
+  context: WorkflowContext,
+  parsed: ParsedOperatorArgs,
+): MergeCommandContext {
+  const explicitPr = parsed.flags.pr.trim();
+  if (explicitPr) {
+    const pr = loadPrByNumber(context.repoRoot, parsePrNumberFlag(explicitPr));
+    const prBranchName = pr.headRefName?.trim()
+      || runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim()
+      || '';
+    const taskSlug = parsed.flags.task.trim()
+      ? slugifyTaskName(parsed.flags.task)
+      : deriveTaskSlugFromPr(context.config, pr, prBranchName);
+    const lock = loadTaskLock(context.commonDir, context.config, taskSlug);
+    const surfaces = resolveCommandSurfaces(context, [], lock?.surfaces ?? []);
+    return { taskSlug, lock: lock ?? null, prBranchName, pr, surfaces };
+  }
+
+  try {
+    const { taskSlug, lock } = inferActiveTaskLock(context, parsed.flags.task);
+    ensureTaskLockMatchesCurrent(context, lock);
+    const branchName = runGit(context.repoRoot, ['branch', '--show-current']) ?? '';
+    const pr = loadOpenPrForBranch(context.repoRoot, branchName);
+    if (!pr) {
+      throw new Error(`No open pull request found for branch ${branchName}. Run ${formatWorkflowCommand(context.config, 'pr')} first.`);
+    }
+    const surfaces = resolveCommandSurfaces(context, [], lock.surfaces);
+    return { taskSlug, lock, prBranchName: branchName, pr, surfaces };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/^No task lock (matches|found)/.test(message) || parsed.flags.task.trim()) {
+      throw error;
+    }
+
+    const branchName = runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim() ?? '';
+    if (!branchName) {
+      throw error;
+    }
+    const pr = loadOpenPrForBranch(context.repoRoot, branchName);
+    if (!pr) {
+      throw new Error([
+        message,
+        `No open pull request found for branch ${branchName}.`,
+        `Pass --pr <number> to merge a known PR without a task lock.`,
+      ].join('\n'));
+    }
+    const taskSlug = deriveTaskSlugFromPr(context.config, pr, branchName);
+    const surfaces = resolveCommandSurfaces(context, [], []);
+    return { taskSlug, lock: null, prBranchName: branchName, pr, surfaces };
+  }
+}
+
+function assertPrIsOpenForMerge(pr: LivePr): void {
+  if (pr.state && pr.state !== 'OPEN') {
+    throw new Error(`Cannot merge PR #${pr.number} because it is ${pr.state}. Only open PRs can be merged.`);
+  }
 }

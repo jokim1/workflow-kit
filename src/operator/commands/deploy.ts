@@ -17,28 +17,42 @@ import {
   loadDeployState,
   loadSmokeRegistry,
   loadPrRecord,
+  loadTaskLock,
   loadProbeState,
   nowIso,
   printResult,
   resolveWorkflowContext,
   runCommandCapture,
   runGh,
+  runGit,
   saveDeployState,
+  savePrRecord,
+  slugifyTaskName,
   type DeployRecord,
   type DeployStatus,
   type DeployVerification,
   type ParsedOperatorArgs,
+  type PrRecord,
+  type TaskLock,
   type WorkflowConfig,
+  type WorkflowContext,
 } from '../state.ts';
 import {
   buildSmokeHandoffMessage,
+  deriveTaskSlugFromPr,
   inferActiveTaskLock,
   isStagingSmokeConfigured,
+  loadPrByNumber,
+  loadPrForBranch,
   makeIdempotencyKey,
+  parsePrNumberFlag,
+  prRecordFromLivePr,
+  requireMergedPr,
   resolveSurfaceHealthcheckUrl,
   resolveCommandSurfaces,
   resolveDeployTargetForTask,
   setNextAction,
+  type LivePr,
   updatePromotedWithoutStagingSmoke,
 } from './helpers.ts';
 import { observeFrontendRuntime, toDeployRuntimeObservation } from '../runtime-observation.ts';
@@ -170,6 +184,7 @@ export interface DispatchDeployOptions {
   explicitSurfaces?: string[];
   explicitTask?: string;
   async?: boolean;
+  allowMissingTaskLock?: boolean;
 }
 
 export type DispatchDeployResult = DeployRecord & {
@@ -181,6 +196,93 @@ export type DispatchDeployResult = DeployRecord & {
   message: string;
 };
 
+interface DeployCommandIdentity {
+  taskSlug: string;
+  branchName: string;
+  lock: TaskLock | null;
+  livePr: LivePr | null;
+}
+
+function resolveDeployCommandIdentity(
+  context: WorkflowContext,
+  parsed: ParsedOperatorArgs,
+  options: DispatchDeployOptions,
+): DeployCommandIdentity {
+  const explicitPr = parsed.flags.pr.trim();
+  if (explicitPr) {
+    const pr = loadPrByNumber(context.repoRoot, parsePrNumberFlag(explicitPr));
+    const currentBranch = runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim() ?? '';
+    const branchName = pr.headRefName?.trim() || currentBranch;
+    const taskSlug = deriveTaskSlugFromPr(context.config, pr, branchName);
+    return {
+      taskSlug,
+      branchName,
+      lock: loadTaskLock(context.commonDir, context.config, taskSlug),
+      livePr: pr,
+    };
+  }
+
+  try {
+    const { taskSlug, lock } = inferActiveTaskLock(context, options.explicitTask ?? parsed.flags.task);
+    return {
+      taskSlug,
+      branchName: lock.branchName,
+      lock,
+      livePr: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const explicitTask = options.explicitTask?.trim() || parsed.flags.task.trim();
+    if (options.allowMissingTaskLock && explicitTask) {
+      const taskSlug = slugifyTaskName(explicitTask);
+      const branchName = runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim() ?? taskSlug;
+      return { taskSlug, branchName, lock: null, livePr: null };
+    }
+    if (!/^No task lock (matches|found)/.test(message) || explicitTask) {
+      throw error;
+    }
+
+    const branchName = runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim() ?? '';
+    if (!branchName) {
+      throw error;
+    }
+    const livePr = loadPrForBranch(context.repoRoot, branchName);
+    if (!livePr) {
+      throw new Error([
+        message,
+        `No pull request found for branch ${branchName}.`,
+        `Pass --pr <number> to deploy a known merged PR without a task lock.`,
+      ].join('\n'));
+    }
+    return {
+      taskSlug: deriveTaskSlugFromPr(context.config, livePr, branchName),
+      branchName,
+      lock: null,
+      livePr,
+    };
+  }
+}
+
+function resolveDeployPrRecord(
+  context: WorkflowContext,
+  identity: DeployCommandIdentity,
+  environment: 'staging' | 'prod',
+): PrRecord | null {
+  if (!identity.livePr) {
+    return loadPrRecord(context.commonDir, context.config, identity.taskSlug);
+  }
+
+  const commandLabel = formatWorkflowCommand(context.config, 'deploy', environment);
+  requireMergedPr(identity.livePr, `${commandLabel} --pr ${identity.livePr.number}`);
+  const branchName = identity.livePr.headRefName?.trim() || identity.branchName;
+  return savePrRecord(
+    context.commonDir,
+    context.config,
+    identity.taskSlug,
+    prRecordFromLivePr(identity.livePr, branchName),
+  );
+}
+
 export async function dispatchDeploy(
   cwd: string,
   parsed: ParsedOperatorArgs,
@@ -189,8 +291,10 @@ export async function dispatchDeploy(
   const context = resolveWorkflowContext(cwd);
   const environment = options.environment ?? normalizeDeployEnvironment(parsed.positional[0] ?? '');
   const explicitSurfaces = options.explicitSurfaces ?? [...parsed.flags.surfaces, ...parsed.positional.slice(1)];
-  const { taskSlug, lock } = inferActiveTaskLock(context, options.explicitTask ?? parsed.flags.task);
-  const surfaces = resolveCommandSurfaces(context, explicitSurfaces, lock.surfaces);
+  const identity = resolveDeployCommandIdentity(context, parsed, options);
+  const { taskSlug } = identity;
+  const surfaces = resolveCommandSurfaces(context, explicitSurfaces, identity.lock?.surfaces ?? []);
+  const prRecord = resolveDeployPrRecord(context, identity, environment);
   const deployConfig = loadDeployConfig(context.repoRoot) ?? emptyDeployConfig();
   const allowHealthcheckStubBypass = process.env.NODE_ENV === 'test'
     && Boolean(process.env.PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS);
@@ -208,7 +312,6 @@ export async function dispatchDeploy(
       deployCommand: formatWorkflowCommand(context.config, 'deploy'),
     }));
   }
-  const prRecord = loadPrRecord(context.commonDir, context.config, taskSlug);
   const target = resolveDeployTargetForTask({
     repoRoot: context.repoRoot,
     baseBranch: context.config.baseBranch,

@@ -487,6 +487,7 @@ export interface OperatorFlags {
   patch: boolean;
   reason: string;
   sha: string;
+  pr: string;
   task: string;
   branch: string;
   file: string;
@@ -1676,6 +1677,7 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
     patch: false,
     reason: '',
     sha: '',
+    pr: '',
     task: '',
     branch: '',
     file: '',
@@ -1840,6 +1842,11 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
 
     if (flagName === '--sha') {
       flags.sha = readFlagValue('--sha');
+      continue;
+    }
+
+    if (flagName === '--pr') {
+      flags.pr = readFlagValue('--pr');
       continue;
     }
 
@@ -2009,6 +2016,17 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
   const requireNoPositional = (usage: string): void => {
     if (parsed.positional.length > 0) failUnexpected(usage);
   };
+  const requirePositivePrNumber = (): void => {
+    const pr = parsed.flags.pr.trim();
+    if (!pr) return;
+    if (!/^[1-9]\d*$/.test(pr)) {
+      throw new Error('--pr requires a positive PR number.');
+    }
+    const parsedPr = Number.parseInt(pr, 10);
+    if (!Number.isSafeInteger(parsedPr)) {
+      throw new Error('--pr requires a safe positive PR number.');
+    }
+  };
 
   switch (parsed.command) {
     case 'devmode': {
@@ -2046,8 +2064,12 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
       requireNoPositional('pipelane run pr [--task <task-name>] [--title <title>] [--message <message>] [--force-include <path>]');
       return;
     case 'merge':
-      assertOnlyFlags(parsed, ['task']);
-      requireNoPositional('pipelane run merge [--task <task-name>]');
+      assertOnlyFlags(parsed, ['task', 'pr']);
+      requirePositivePrNumber();
+      if (parsed.flags.task.trim() && parsed.flags.pr.trim()) {
+        throw new Error('merge cannot combine --task and --pr; choose one PR/task identity.');
+      }
+      requireNoPositional('pipelane run merge [--task <task-name> | --pr <number>]');
       return;
     case 'release-check':
       assertOnlyFlags(parsed, ['surfaces']);
@@ -2060,7 +2082,8 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
       }
       return;
     case 'deploy':
-      assertOnlyFlags(parsed, ['task', 'sha', 'surfaces', 'async', 'skipSmokeCoverage', 'reason']);
+      assertOnlyFlags(parsed, ['task', 'pr', 'sha', 'surfaces', 'async', 'skipSmokeCoverage', 'reason']);
+      requirePositivePrNumber();
       if (parsed.positional.length === 0) {
         throw new Error('deploy requires an environment: staging or prod.');
       }
@@ -2069,6 +2092,12 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
       }
       if (parsed.flags.reason && !parsed.flags.skipSmokeCoverage) {
         throw new Error('deploy only accepts --reason together with --skip-smoke-coverage.');
+      }
+      if (parsed.flags.task.trim() && parsed.flags.pr.trim()) {
+        throw new Error('deploy cannot combine --task and --pr; choose one PR/task identity.');
+      }
+      if (parsed.flags.pr.trim() && parsed.flags.sha.trim()) {
+        throw new Error('deploy cannot combine --pr and --sha; --pr deploys the PR merge commit.');
       }
       if (parsed.flags.skipSmokeCoverage && parsed.positional[0] === 'staging') {
         throw new Error('--skip-smoke-coverage only applies to production deploys.');
@@ -2222,6 +2251,7 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
           'mode',
           'title',
           'message',
+          'pr',
           'recover',
           'bindingFingerprint',
           'sha',
@@ -2232,6 +2262,22 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
         ]);
         if (parsed.positional.length !== 2) {
           throw new Error('api action requires exactly: pipelane run api action <action-id> [--execute] [--confirm-token <token>]');
+        }
+        requirePositivePrNumber();
+        const actionId = parsed.positional[1] ?? '';
+        if (
+          (actionId === 'merge' || actionId === 'deploy.staging' || actionId === 'deploy.prod')
+          && parsed.flags.task.trim()
+          && parsed.flags.pr.trim()
+        ) {
+          throw new Error(`${actionId} cannot combine --task and --pr; choose one PR/task identity.`);
+        }
+        if (
+          (actionId === 'deploy.staging' || actionId === 'deploy.prod')
+          && parsed.flags.pr.trim()
+          && parsed.flags.sha.trim()
+        ) {
+          throw new Error(`${actionId} cannot combine --pr and --sha; --pr deploys the PR merge commit.`);
         }
         return;
       }
@@ -2254,6 +2300,7 @@ const FLAG_RENDERERS: Array<{ key: OperatorFlagKey; label: string; active: (flag
   { key: 'patch', label: '--patch', active: (flags) => flags.patch },
   { key: 'reason', label: '--reason', active: (flags) => flags.reason.trim().length > 0 },
   { key: 'sha', label: '--sha', active: (flags) => flags.sha.trim().length > 0 },
+  { key: 'pr', label: '--pr', active: (flags) => flags.pr.trim().length > 0 },
   { key: 'task', label: '--task', active: (flags) => flags.task.trim().length > 0 },
   { key: 'branch', label: '--branch', active: (flags) => flags.branch.trim().length > 0 },
   { key: 'file', label: '--file', active: (flags) => flags.file.trim().length > 0 },

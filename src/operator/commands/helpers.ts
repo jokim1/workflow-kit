@@ -23,6 +23,17 @@ import {
 } from '../state.ts';
 import { verifyTaskLockState } from '../repo-guard.ts';
 
+export interface LivePr {
+  number: number;
+  title: string;
+  url: string;
+  state?: string | null;
+  baseRefName?: string | null;
+  headRefName?: string | null;
+  mergeCommit?: { oid?: string | null } | null;
+  mergedAt?: string | null;
+}
+
 export function resolveCommandSurfaces(
   context: WorkflowContext,
   explicit: string[] = [],
@@ -220,7 +231,89 @@ function parseJsonOrThrow<T>(text: string | null, fallback: string): T {
   }
 }
 
-export function loadPrForBranch(repoRoot: string, branchName: string): { number: number; title: string; url: string } | null {
+export function parsePrNumberFlag(raw: string, flagName = '--pr'): number {
+  const trimmed = raw.trim();
+  if (!/^[1-9]\d*$/.test(trimmed)) {
+    throw new Error(`${flagName} requires a positive PR number.`);
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${flagName} requires a safe positive PR number.`);
+  }
+  return parsed;
+}
+
+export function inferTaskSlugsFromBranchName(config: WorkflowConfig, branchName: string): string[] {
+  const prefixes = [config.branchPrefix, ...(config.legacyBranchPrefixes ?? []), 'task/', 'codex/']
+    .map((prefix) => prefix.trim())
+    .filter(Boolean)
+    .filter((prefix, index, all) => all.indexOf(prefix) === index)
+    .sort((left, right) => right.length - left.length);
+  const slugs = new Set<string>();
+
+  for (const prefix of prefixes) {
+    if (!branchName.startsWith(prefix)) {
+      continue;
+    }
+    const remainder = branchName.slice(prefix.length);
+    if (!remainder) {
+      continue;
+    }
+    const withoutNonce = remainder.replace(/-[a-f0-9]{4}$/i, '');
+    const slug = slugifyTaskName(withoutNonce);
+    if (slug) {
+      slugs.add(slug);
+    }
+  }
+
+  return [...slugs].sort();
+}
+
+export function inferTaskSlugFromBranchName(config: WorkflowConfig, branchName: string): string {
+  const slugs = inferTaskSlugsFromBranchName(config, branchName);
+  return slugs.length === 1 ? slugs[0] : '';
+}
+
+export function deriveTaskSlugFromPr(
+  config: WorkflowConfig,
+  pr: Pick<LivePr, 'number' | 'headRefName'>,
+  fallbackBranchName = '',
+): string {
+  const branchName = (pr.headRefName ?? '').trim() || fallbackBranchName.trim();
+  const canUseBranch = branchName
+    && branchName !== config.baseBranch
+    && branchName !== 'main'
+    && branchName !== 'master';
+  if (canUseBranch) {
+    return inferTaskSlugFromBranchName(config, branchName) || slugifyTaskName(branchName);
+  }
+  return `pr-${pr.number}`;
+}
+
+export function prRecordFromLivePr(
+  pr: LivePr,
+  branchName: string,
+): Omit<PrRecord, 'taskSlug' | 'updatedAt'> {
+  const mergeSha = pr.mergeCommit?.oid?.trim();
+  return {
+    branchName,
+    title: pr.title,
+    number: pr.number,
+    url: pr.url,
+    ...(mergeSha ? { mergedSha: mergeSha } : {}),
+    ...(pr.mergedAt ? { mergedAt: pr.mergedAt } : {}),
+  };
+}
+
+export function requireMergedPr(pr: LivePr, commandLabel: string): string {
+  const mergeSha = pr.mergeCommit?.oid?.trim();
+  if (pr.state !== 'MERGED' || !mergeSha) {
+    throw new Error(`${commandLabel} can only use merged PRs. PR #${pr.number} is ${pr.state ?? 'unknown'} and has no merge commit.`);
+  }
+  return mergeSha;
+}
+
+export function loadPrsForBranch(repoRoot: string, branchName: string): LivePr[] {
   const output = runGh(repoRoot, [
     'pr',
     'list',
@@ -229,15 +322,52 @@ export function loadPrForBranch(repoRoot: string, branchName: string): { number:
     '--head',
     branchName,
     '--json',
-    'number,title,url,state,baseRefName,headRefName',
+    'number,title,url,state,baseRefName,headRefName,mergeCommit,mergedAt',
   ], true);
 
   if (!output) {
+    return [];
+  }
+
+  return parseJsonOrThrow<LivePr[]>(output, `Could not parse PR list for ${branchName}.`);
+}
+
+export function loadPrForBranch(repoRoot: string, branchName: string): LivePr | null {
+  return selectSinglePr(loadPrsForBranch(repoRoot, branchName), `branch ${branchName}`);
+}
+
+export function loadOpenPrForBranch(repoRoot: string, branchName: string): LivePr | null {
+  const prs = loadPrsForBranch(repoRoot, branchName)
+    .filter((pr) => !pr.state || pr.state === 'OPEN');
+  return selectSinglePr(prs, `open PR for branch ${branchName}`);
+}
+
+function selectSinglePr(prs: LivePr[], label: string): LivePr | null {
+  if (prs.length === 0) {
     return null;
   }
 
-  const prs = parseJsonOrThrow<Array<{ number: number; title: string; url: string }>>(output, `Could not parse PR list for ${branchName}.`);
-  return prs[0] ?? null;
+  const open = prs.filter((pr) => pr.state === 'OPEN');
+  if (open.length === 1) {
+    return open[0];
+  }
+  if (open.length > 1) {
+    throw new Error(`Multiple open pull requests match ${label}. Pass --pr explicitly.`);
+  }
+
+  const active = prs.filter((pr) => pr.state && pr.state !== 'CLOSED');
+  if (active.length === 1) {
+    return active[0];
+  }
+  if (active.length > 1) {
+    throw new Error(`Multiple pull requests match ${label}. Pass --pr explicitly.`);
+  }
+
+  if (prs.length === 1) {
+    return prs[0];
+  }
+
+  throw new Error(`Multiple pull requests match ${label}. Pass --pr explicitly.`);
 }
 
 export function loadPrDetails(repoRoot: string, prNumber: number): {
@@ -245,6 +375,8 @@ export function loadPrDetails(repoRoot: string, prNumber: number): {
   title: string;
   url: string;
   state?: string | null;
+  baseRefName?: string | null;
+  headRefName?: string | null;
   mergeCommit?: { oid: string } | null;
   mergedAt?: string | null;
 } {
@@ -253,9 +385,17 @@ export function loadPrDetails(repoRoot: string, prNumber: number): {
     'view',
     String(prNumber),
     '--json',
-    'number,title,url,state,mergeCommit,mergedAt',
+    'number,title,url,state,baseRefName,headRefName,mergeCommit,mergedAt',
   ]);
   return parseJsonOrThrow(output, `Could not parse PR details for #${prNumber}.`);
+}
+
+export function loadPrByNumber(repoRoot: string, prNumber: number): LivePr {
+  const pr = loadPrDetails(repoRoot, prNumber);
+  if (pr.number !== prNumber || !pr.title || !pr.url) {
+    throw new Error(`No pull request found for #${prNumber}.`);
+  }
+  return pr;
 }
 
 export interface PollForMergedShaOptions {
