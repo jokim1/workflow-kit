@@ -5,9 +5,11 @@ import {
   findDenyListHits,
   hasStagedChanges,
   latestCommitSubject,
-  loadPrForBranch,
+  loadOpenPrForBranch,
   resolveCommandSurfaces,
   setNextAction,
+  deriveTaskSlugFromPr,
+  type LivePr,
 } from './helpers.ts';
 import { emptyDeployConfig, evaluateReleaseReadiness, loadDeployConfig } from '../release-gate.ts';
 import {
@@ -67,9 +69,11 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
 
   taskSlug = binding.taskSlug;
   lock = binding.lock;
-  ensureTaskLockMatchesCurrent(context, lock);
+  if (lock) {
+    ensureTaskLockMatchesCurrent(context, lock);
+  }
 
-  const surfaces = resolveCommandSurfaces(context, parsed.flags.surfaces, lock.surfaces);
+  const surfaces = resolveCommandSurfaces(context, parsed.flags.surfaces, lock?.surfaces ?? []);
   if (context.modeState.mode === 'release') {
     const deployState = loadDeployState(context.commonDir, context.config);
     const probeState = loadProbeState(context.commonDir, context.config);
@@ -88,7 +92,7 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
   const branchName = runGit(context.repoRoot, ['branch', '--show-current']) ?? '';
   const statusText = runGit(context.repoRoot, ['status', '--short'], true) ?? '';
   const dirty = statusText.trim().length > 0;
-  const existingPr = loadPrForBranch(context.repoRoot, branchName);
+  const existingPr = binding.livePr ?? loadOpenPrForBranch(context.repoRoot, branchName);
   let prTitle = parsed.flags.title.trim();
 
   if (!existingPr && !prTitle && dirty) {
@@ -156,7 +160,7 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
     ]);
   }
 
-  const refreshedPr = loadPrForBranch(context.repoRoot, branchName);
+  const refreshedPr = loadOpenPrForBranch(context.repoRoot, branchName);
   prNumber = refreshedPr?.number ?? prNumber;
   prUrl = refreshedPr?.url ?? prUrl;
 
@@ -193,7 +197,8 @@ function resolvePrTaskBinding(
   context: ReturnType<typeof resolveWorkflowContext>,
   parsed: ParsedOperatorArgs,
 ):
-  | { status: 'resolved'; taskSlug: string; lock: TaskLock }
+  | { status: 'resolved'; taskSlug: string; lock: TaskLock; livePr: null }
+  | { status: 'resolved'; taskSlug: string; lock: null; livePr: LivePr }
   | { status: 'handoff'; taskSlug: string; lock: TaskLock; message: string }
   | { status: 'needs-recovery'; diagnosis: Extract<ReturnType<typeof diagnoseTaskBinding>, { status: 'needs-recovery' }> }
   | { status: 'blocked'; reason: string } {
@@ -216,6 +221,7 @@ function resolvePrTaskBinding(
       status: 'resolved',
       taskSlug: recovered.taskSlug,
       lock: recovered.lock,
+      livePr: null,
     };
   }
 
@@ -225,10 +231,48 @@ function resolvePrTaskBinding(
       status: 'resolved',
       taskSlug: diagnosis.taskSlug,
       lock: diagnosis.lock,
+      livePr: null,
     };
   }
   if (diagnosis.status === 'needs-recovery') {
     return { status: 'needs-recovery', diagnosis };
   }
+  const lockless = resolveLocklessPrFromCurrentBranch(context, parsed.flags.task, diagnosis.reason);
+  if (lockless) {
+    return lockless;
+  }
   return { status: 'blocked', reason: diagnosis.reason };
+}
+
+function resolveLocklessPrFromCurrentBranch(
+  context: ReturnType<typeof resolveWorkflowContext>,
+  explicitTask: string,
+  blockedReason: string,
+): { status: 'resolved'; taskSlug: string; lock: null; livePr: LivePr } | null {
+  if (!/^No task lock (matches|found)/.test(blockedReason)) {
+    return null;
+  }
+
+  const branchName = runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim() ?? '';
+  if (!branchName) {
+    return null;
+  }
+  const livePr = loadOpenPrForBranch(context.repoRoot, branchName);
+  if (!livePr) {
+    return null;
+  }
+
+  const derivedTaskSlug = deriveTaskSlugFromPr(context.config, livePr, branchName);
+  const explicitSlug = explicitTask.trim()
+    ? deriveTaskSlugFromPr(context.config, { number: livePr.number, headRefName: explicitTask }, explicitTask)
+    : '';
+  if (explicitSlug && explicitSlug !== derivedTaskSlug) {
+    return null;
+  }
+  return {
+    status: 'resolved',
+    taskSlug: explicitSlug || derivedTaskSlug,
+    lock: null,
+    livePr,
+  };
 }

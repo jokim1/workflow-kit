@@ -659,12 +659,13 @@ function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs, c
         bindingFingerprint: flags.bindingFingerprint,
       };
     case 'merge':
-      return { task: flags.task };
+      return { task: flags.task, pr: flags.pr };
     case 'deploy.staging':
-      return { task: flags.task, sha: flags.sha, surfaces: flags.surfaces };
+      return { task: flags.task, pr: flags.pr, sha: flags.sha, surfaces: flags.surfaces };
     case 'deploy.prod':
       return {
         task: flags.task,
+        pr: flags.pr,
         sha: flags.sha,
         surfaces: flags.surfaces,
         skipSmokeCoverage: flags.skipSmokeCoverage,
@@ -842,16 +843,19 @@ function buildUnderlyingArgs(actionId: StableActionId, parsed: ParsedOperatorArg
     case 'merge':
       args.push('merge');
       pushOpt('--task', flags.task);
+      pushOpt('--pr', flags.pr);
       break;
     case 'deploy.staging':
       args.push('deploy', 'staging');
       pushOpt('--task', flags.task);
+      pushOpt('--pr', flags.pr);
       pushOpt('--sha', flags.sha);
       pushSurfaces();
       break;
     case 'deploy.prod':
       args.push('deploy', 'prod');
       pushOpt('--task', flags.task);
+      pushOpt('--pr', flags.pr);
       pushOpt('--sha', flags.sha);
       pushSurfaces();
       if (flags.skipSmokeCoverage) args.push('--skip-smoke-coverage');

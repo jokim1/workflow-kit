@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 import { closeSync, existsSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
 import path from 'node:path';
 
-import { loadPrForBranch } from './commands/helpers.ts';
+import {
+  inferTaskSlugsFromBranchName as inferTaskSlugsFromBranchNameFromHelpers,
+  loadOpenPrForBranch,
+} from './commands/helpers.ts';
 import { taskBranchMatches, verifyTaskLockState } from './repo-guard.ts';
 import {
   DEFAULT_MODE,
@@ -109,29 +112,7 @@ export function isTaskBindingRecovery(value: unknown): value is TaskBindingRecov
 }
 
 export function inferTaskSlugsFromBranchName(config: WorkflowConfig, branchName: string): string[] {
-  const prefixes = [config.branchPrefix, ...(config.legacyBranchPrefixes ?? [])]
-    .map((prefix) => prefix.trim())
-    .filter(Boolean)
-    .filter((prefix, index, all) => all.indexOf(prefix) === index)
-    .sort((left, right) => right.length - left.length);
-  const slugs = new Set<string>();
-
-  for (const prefix of prefixes) {
-    if (!branchName.startsWith(prefix)) {
-      continue;
-    }
-    const remainder = branchName.slice(prefix.length);
-    if (!remainder) {
-      continue;
-    }
-    const withoutNonce = remainder.replace(/-[a-f0-9]{4}$/i, '');
-    const slug = slugifyTaskName(withoutNonce);
-    if (slug) {
-      slugs.add(slug);
-    }
-  }
-
-  return [...slugs].sort();
+  return inferTaskSlugsFromBranchNameFromHelpers(config, branchName);
 }
 
 export function inferTaskSlugFromBranchName(config: WorkflowConfig, branchName: string): string {
@@ -421,7 +402,7 @@ export function resolveLocalPrTitleRequirement(
   if (!statusText.trim()) {
     return { required: false, defaultTitle: '' };
   }
-  if (loadPrForBranch(context.repoRoot, branchName)) {
+  if (loadOpenPrForBranch(context.repoRoot, branchName)) {
     return { required: false, defaultTitle: '' };
   }
   const record = loadPrRecord(context.commonDir, context.config, taskSlug);

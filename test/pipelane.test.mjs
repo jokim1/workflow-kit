@@ -149,9 +149,10 @@ if (args[0] === 'pr' && args[1] === 'list') {
 }
 if (args[0] === 'pr' && args[1] === 'create') {
   const head = findFlag('--head');
+  const base = findFlag('--base') || 'main';
   const title = findFlag('--title');
   const number = Object.keys(state.prs).length + 1;
-  const pr = { number, title, url: 'https://example.test/pr/' + number, state: 'OPEN', mergeCommit: null, mergedAt: null };
+  const pr = { number, title, url: 'https://example.test/pr/' + number, state: 'OPEN', baseRefName: base, headRefName: head, mergeCommit: null, mergedAt: null };
   state.prs[head] = pr;
   writeState();
   process.stdout.write(pr.url + '\\n');
@@ -5716,6 +5717,77 @@ test('pr, merge, deploy, and task-lock work with a fake gh adapter', () => {
   }
 });
 
+test('lockless PR branch can report, merge by PR number, and deploy the merged PR to staging', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+    PIPELANE_DEPLOY_WATCH_STUB: 'succeeded',
+    PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS: '200',
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.prePrChecks = [];
+      config.buildMode.autoDeployOnMerge = false;
+    });
+    commitAll(repoRoot, 'Adopt pipelane');
+
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Canvas Selection Arrows', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
+    const opened = JSON.parse(runCli(['run', 'pr', '--title', 'Canvas Selection Arrows', '--json'], created.worktreePath, env).stdout);
+    assert.equal(opened.taskSlug, 'canvas-selection-arrows');
+
+    const lockPath = path.join(resolveCommonDir(repoRoot), 'pipelane-state', 'task-locks', `${created.taskSlug}.json`);
+    rmSync(lockPath, { force: true });
+
+    const reported = JSON.parse(runCli(['run', 'pr', '--json'], created.worktreePath, env).stdout);
+    assert.equal(reported.taskSlug, 'canvas-selection-arrows');
+    assert.equal(reported.branchName, created.branch);
+    assert.match(reported.url, /example\.test\/pr\/1/);
+    assert.equal(existsSync(lockPath), false, 'lockless /pr must not recreate the task lock');
+
+    const openDeploy = runCli(['run', 'deploy', 'staging', '--pr', '1', '--json'], repoRoot, env, true);
+    assert.equal(openDeploy.status, 1);
+    assert.match(openDeploy.stderr, /can only use merged PRs/);
+    assert.equal(existsSync(lockPath), false, 'failed lockless deploy must not recreate the task lock');
+
+    const currentBranch = run('git', ['branch', '--show-current'], repoRoot);
+    const merged = JSON.parse(runCli(['run', 'merge', '--pr', '1', '--json'], repoRoot, env).stdout);
+    assert.equal(merged.mergedSha, 'deadbeefcafebabe');
+    assert.match(merged.message, /Pull request merged on GitHub/);
+    assert.match(merged.message, new RegExp(`Current worktree branch remains ${currentBranch}\\.`));
+    assert.equal(existsSync(lockPath), false, 'lockless merge must not recreate the task lock');
+
+    const deployed = JSON.parse(runCli(['run', 'deploy', 'staging', '--pr', '1', '--json'], repoRoot, env).stdout);
+    assert.equal(deployed.environment, 'staging');
+    assert.equal(deployed.sha, 'deadbeefcafebabe');
+    assert.equal(deployed.taskSlug, 'canvas-selection-arrows');
+    assert.equal(deployed.status, 'succeeded');
+    assert.equal(existsSync(lockPath), false, 'lockless deploy must not recreate the task lock');
+
+    const prState = JSON.parse(readFileSync(path.join(resolveCommonDir(repoRoot), 'pipelane-state', 'pr-state.json'), 'utf8'));
+    assert.equal(prState.records['canvas-selection-arrows'].number, 1);
+    assert.equal(prState.records['canvas-selection-arrows'].mergedSha, 'deadbeefcafebabe');
+
+    const ghState = JSON.parse(readFileSync(ghStateFile, 'utf8'));
+    assert.equal(ghState.prMergeCalls.length, 1);
+    assert.equal(ghState.workflows.length, 1);
+    assert.ok(ghState.workflows[0].args.includes('environment=staging'));
+    assert.ok(ghState.workflows[0].args.includes('sha=deadbeefcafebabe'));
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
 test('merge skips auto-deploy in build mode when autoDeployOnMerge is disabled', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
@@ -8863,6 +8935,26 @@ test('api action preflight: risky action issues a confirmation token', () => {
   }
 });
 
+test('api action preflight includes explicit PR identity in normalized inputs', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt pipelane');
+
+    const merge = JSON.parse(runCli(['run', 'api', 'action', 'merge', '--pr', '422'], repoRoot).stdout);
+    assert.equal(merge.data.preflight.normalizedInputs.pr, '422');
+    assert.equal(merge.data.preflight.normalizedInputs.task, '');
+    assert.ok(merge.data.preflight.confirmation?.token);
+
+    const deploy = JSON.parse(runCli(['run', 'api', 'action', 'deploy.staging', '--pr', '422', '--surfaces', 'frontend'], repoRoot).stdout);
+    assert.equal(deploy.data.preflight.normalizedInputs.pr, '422');
+    assert.deepEqual(deploy.data.preflight.normalizedInputs.surfaces, ['frontend']);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
 test('api action execute: risky action rejects missing or bad tokens', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   try {
@@ -9065,6 +9157,37 @@ test('operator parser rejects unknown flags, missing values, unused flags, and u
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('operator parser accepts --pr for merge, deploy, and API actions', async () => {
+  const state = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+
+  const merge = state.parseOperatorArgs(['merge', '--pr', '422']);
+  state.validateOperatorArgs(merge);
+  assert.equal(merge.flags.pr, '422');
+
+  const deploy = state.parseOperatorArgs(['deploy', 'staging', '--pr', '422']);
+  state.validateOperatorArgs(deploy);
+  assert.equal(deploy.flags.pr, '422');
+
+  const api = state.parseOperatorArgs(['api', 'action', 'deploy.staging', '--pr', '422']);
+  state.validateOperatorArgs(api);
+  assert.equal(api.flags.pr, '422');
+
+  const ambiguousTask = state.parseOperatorArgs(['merge', '--task', 'Canvas', '--pr', '422']);
+  assert.throws(() => state.validateOperatorArgs(ambiguousTask), /cannot combine --task and --pr/);
+
+  const ambiguousSha = state.parseOperatorArgs(['deploy', 'staging', '--pr', '422', '--sha', 'HEAD']);
+  assert.throws(() => state.validateOperatorArgs(ambiguousSha), /cannot combine --pr and --sha/);
+
+  const invalidPr = state.parseOperatorArgs(['merge', '--pr', 'abc']);
+  assert.throws(() => state.validateOperatorArgs(invalidPr), /--pr requires a positive PR number/);
+
+  const apiAmbiguousTask = state.parseOperatorArgs(['api', 'action', 'merge', '--task', 'Canvas', '--pr', '422']);
+  assert.throws(() => state.validateOperatorArgs(apiAmbiguousTask), /merge cannot combine --task and --pr/);
+
+  const apiAmbiguousSha = state.parseOperatorArgs(['api', 'action', 'deploy.staging', '--pr', '422', '--sha', 'HEAD']);
+  assert.throws(() => state.validateOperatorArgs(apiAmbiguousSha), /deploy\.staging cannot combine --pr and --sha/);
 });
 
 test('init refuses to overwrite an existing pipelane config', () => {
