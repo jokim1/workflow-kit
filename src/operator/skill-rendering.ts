@@ -208,13 +208,35 @@ run_pipelane() {
   exec "$bin" run "$subcommand" "$@"
 }
 
+should_use_managed_bootloader() {
+  if [ ! -x "$managed_bin" ]; then
+    return 1
+  fi
+
+  case "$command" in
+    pipelane)
+      if [ "$#" -eq 0 ]; then
+        return 1
+      fi
+      case "$1" in
+        status|web|board|update)
+          return 0
+          ;;
+      esac
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 cd "$repo_root"
 
-# Updates must run from the managed runtime when invoked through a durable
-# machine-local skill. A stale repo-local install is exactly what update is
-# meant to repair, so letting node_modules own this path can leave Codex/Claude
-# command surfaces permanently stale.
-if [ "$command" = "pipelane" ] && [ "$#" -gt 0 ] && [ "$1" = "update" ] && [ -x "$managed_bin" ]; then
+# Auto-update-capable commands enter the managed runtime first. The managed
+# CLI checks whether the repo-local install is stale, updates it if needed,
+# then re-execs the repo-local bin for the real command.
+if should_use_managed_bootloader "$@"; then
   export PIPELANE_MANAGED_RUNTIME=1
   export PIPELANE_MANAGED_RUNTIME_ROOT="${options.managedRuntimeRoot}"
   run_pipelane "$managed_bin" "$command" "$@"

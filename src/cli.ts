@@ -2,6 +2,7 @@
 
 import { accessSync, constants, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import path from 'node:path';
 import readline from 'node:readline/promises';
 
 import { handlePipelane } from './dashboard/launcher.ts';
@@ -15,7 +16,7 @@ import { runOperator } from './operator/index.ts';
 import { installNpmGuard } from './operator/npm-guard-install.ts';
 import { resolveRepoRoot } from './operator/state.ts';
 import { bootstrapWorktreeNodeModulesIfNeeded } from './operator/task-workspaces.ts';
-import { parseUpdateArgs, runUpdate } from './operator/update.ts';
+import { maybeAutoUpdate, parseUpdateArgs, runUpdate } from './operator/update.ts';
 import { runVerify } from './operator/verify.ts';
 
 function printTopLevelHelp(): void {
@@ -102,6 +103,7 @@ const SKIP_WORKTREE_BOOTSTRAP_COMMANDS = new Set(['init', 'bootstrap', 'install-
 // from a managed runtime: a stale repo-local install is the thing update is
 // repairing. It still participates in worktree node_modules bootstrap above.
 const SKIP_MANAGED_REEXEC_COMMANDS = new Set([...SKIP_WORKTREE_BOOTSTRAP_COMMANDS, 'update']);
+const AUTO_UPDATE_COMMANDS = new Set(['setup', 'sync-docs', 'configure', 'dashboard', 'board', 'run']);
 
 function isExecutablePath(targetPath: string): boolean {
   try {
@@ -133,6 +135,30 @@ function maybeReexecRepoLocalPipelane(cwd: string): void {
   const result = spawnSync(localBin, process.argv.slice(2), {
     cwd: repoRoot,
     env: reexecEnv,
+    stdio: 'inherit',
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  process.exit(result.status === null ? 1 : result.status);
+}
+
+function reexecAfterAutoUpdate(cwd: string): void {
+  const repoRoot = resolveRepoRoot(cwd, true);
+  const localBin = path.join(repoRoot, 'node_modules', '.bin', 'pipelane');
+  if (!existsSync(localBin) || !isExecutablePath(localBin)) {
+    throw new Error(
+      `pipelane auto-update completed, but the updated local executable is unavailable at ${localBin}. ` +
+      'Run `npm install` in this repo to restore node_modules/.bin/pipelane, then retry.',
+    );
+  }
+
+  const result = spawnSync(localBin, process.argv.slice(2), {
+    cwd,
+    env: {
+      ...process.env,
+      PIPELANE_AUTO_UPDATE_REEXECED: '1',
+    },
     stdio: 'inherit',
   });
   if (result.error) {
@@ -179,6 +205,12 @@ async function main(): Promise<void> {
     const bootstrap = bootstrapWorktreeNodeModulesIfNeeded(process.cwd());
     if (bootstrap.message) {
       process.stderr.write(`${bootstrap.message}\n`);
+    }
+  }
+  if (AUTO_UPDATE_COMMANDS.has(command)) {
+    const autoUpdate = await maybeAutoUpdate(process.cwd());
+    if (autoUpdate.updated) {
+      reexecAfterAutoUpdate(process.cwd());
     }
   }
   if (!SKIP_MANAGED_REEXEC_COMMANDS.has(command)) {
