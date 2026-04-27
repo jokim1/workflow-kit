@@ -14380,3 +14380,285 @@ test('detectSetupDrift reports drift when preinstall guard is missing and no dri
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
+
+// State-resilience suite. Three layers, each with its own regression
+// guard:
+//   - Fix A: legacy stateDir fallback (the rocketboard 2026-04-26
+//     incident — config.stateDir renamed, mode-state.json orphaned,
+//     mode silently fell back to 'build').
+//   - Fix C: install marker + loud-warn when expected state is gone
+//     after a previous install.
+//   - Fix B: schemaVersion envelope on every state file + migration
+//     runner registry.
+// See REPO_GUIDANCE.md "State-resilience invariants" for the policy.
+
+function captureStderr(fn) {
+  const original = process.stderr.write.bind(process.stderr);
+  const captured = [];
+  process.stderr.write = (chunk, ...rest) => {
+    captured.push(typeof chunk === 'string' ? chunk : chunk.toString());
+    return true;
+  };
+  try {
+    return { result: fn(), stderr: captured.join('') };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
+function makeStateScratch() {
+  // The state-resilience helpers operate against a `commonDir` (git
+  // common dir) and a `WorkflowConfig`. We don't need a real repo for
+  // these unit-level tests — a tmpdir + default config is enough.
+  const tmpRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-resilience-'));
+  const commonDir = path.join(tmpRoot, '.git');
+  mkdirSync(commonDir, { recursive: true });
+  return { tmpRoot, commonDir };
+}
+
+test('migrateLegacyStateDir copies orphaned state forward when canonical dir is empty', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    // Reproduce the rocketboard scenario: a populated legacy state
+    // dir that the operator wrote to under the old default name,
+    // and a canonical dir that pipelane just started using after a
+    // bump. modeState says release, but the canonical dir is empty.
+    const legacyDir = path.join(commonDir, 'rocketboard-workflow');
+    mkdirSync(path.join(legacyDir, 'task-locks'), { recursive: true });
+    writeFileSync(
+      path.join(legacyDir, 'mode-state.json'),
+      JSON.stringify({ mode: 'release', requestedSurfaces: ['frontend'], override: null, updatedAt: '2026-04-25T00:00:00Z' }, null, 2),
+      'utf8',
+    );
+    writeFileSync(
+      path.join(legacyDir, 'task-locks', 'demo-1.json'),
+      JSON.stringify({ taskSlug: 'demo-1', branchName: 'codex/demo-1', worktreePath: '/tmp/demo-1', mode: 'build', surfaces: ['frontend'], updatedAt: '2026-04-24T00:00:00Z' }, null, 2),
+      'utf8',
+    );
+
+    const canonicalDir = path.join(commonDir, config.stateDir);
+    assert.equal(existsSync(canonicalDir), false, 'canonical dir should be absent before migration');
+
+    const { stderr } = captureStderr(() => stateMod.migrateLegacyStateDir(commonDir, config));
+
+    // Mode-state and task-locks made it across.
+    assert.equal(existsSync(path.join(canonicalDir, 'mode-state.json')), true);
+    assert.equal(existsSync(path.join(canonicalDir, 'task-locks', 'demo-1.json')), true);
+    // Audit file records what happened.
+    const audit = JSON.parse(readFileSync(path.join(canonicalDir, 'legacy-migration.json'), 'utf8'));
+    assert.equal(audit.from, legacyDir);
+    assert.equal(audit.to, canonicalDir);
+    assert.ok(audit.entries.includes('mode-state.json'));
+    // Install marker planted so subsequent loads know this is "installed".
+    assert.equal(stateMod.hasInstallMarker(commonDir, config), true);
+    // Operator gets a stderr banner so the migration isn't silent.
+    assert.match(stderr, /Migrated \d+ legacy state file\(s\)/);
+
+    // The mode that was orphaned in the legacy dir is now what
+    // loadModeState returns — i.e. the rocketboard regression is
+    // fixed end-to-end.
+    const mode = stateMod.loadModeState(commonDir, config);
+    assert.equal(mode.mode, 'release');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('migrateLegacyStateDir is idempotent: second call is a no-op', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    const legacyDir = path.join(commonDir, 'rocketboard-workflow');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(
+      path.join(legacyDir, 'mode-state.json'),
+      JSON.stringify({ mode: 'release', requestedSurfaces: [], override: null, updatedAt: null }, null, 2),
+      'utf8',
+    );
+
+    captureStderr(() => stateMod.migrateLegacyStateDir(commonDir, config));
+    // Mutate the legacy file after the first migration. A second
+    // call should NOT pull the new contents forward — the audit
+    // file is the gate.
+    writeFileSync(
+      path.join(legacyDir, 'mode-state.json'),
+      JSON.stringify({ mode: 'build', requestedSurfaces: [], override: null, updatedAt: null }, null, 2),
+      'utf8',
+    );
+    const { stderr } = captureStderr(() => stateMod.migrateLegacyStateDir(commonDir, config));
+    assert.equal(stderr, '', 'second migration should be silent');
+
+    const canonicalDir = path.join(commonDir, config.stateDir);
+    const stillReleased = JSON.parse(readFileSync(path.join(canonicalDir, 'mode-state.json'), 'utf8'));
+    assert.equal(stillReleased.mode, 'release', 'canonical mode-state should not be overwritten by re-run');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('migrateLegacyStateDir never clobbers a canonical file that already exists', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    const legacyDir = path.join(commonDir, 'rocketboard-workflow');
+    const canonicalDir = path.join(commonDir, config.stateDir);
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(canonicalDir, { recursive: true });
+    // Canonical wins when both exist — pipelane has been writing
+    // here post-bump, so the canonical copy is fresher.
+    writeFileSync(
+      path.join(legacyDir, 'pr-state.json'),
+      JSON.stringify({ records: { stale: { taskSlug: 'stale' } } }, null, 2),
+      'utf8',
+    );
+    writeFileSync(
+      path.join(canonicalDir, 'pr-state.json'),
+      JSON.stringify({ records: { fresh: { taskSlug: 'fresh' } } }, null, 2),
+      'utf8',
+    );
+
+    captureStderr(() => stateMod.migrateLegacyStateDir(commonDir, config));
+    const merged = JSON.parse(readFileSync(path.join(canonicalDir, 'pr-state.json'), 'utf8'));
+    assert.equal(typeof merged.records.fresh, 'object', 'fresh canonical record must survive');
+    assert.equal(merged.records.stale, undefined, 'stale legacy record must NOT clobber canonical');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('ensureStateDir plants installed.json marker on first call', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    assert.equal(stateMod.hasInstallMarker(commonDir, config), false);
+    stateMod.ensureStateDir(commonDir, config);
+    assert.equal(stateMod.hasInstallMarker(commonDir, config), true);
+    const marker = JSON.parse(readFileSync(stateMod.installMarkerPath(commonDir, config), 'utf8'));
+    assert.equal(typeof marker.installedAt, 'string');
+    assert.ok(marker.installedAt.length > 0);
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('loadModeState is silent on a true fresh install (no marker, no warn)', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    const { result, stderr } = captureStderr(() => stateMod.loadModeState(commonDir, config));
+    assert.equal(result.mode, 'build', 'fresh install defaults to build');
+    assert.equal(stderr, '', 'fresh install should not warn — there is no prior state to lose');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('loadModeState warns loudly when expected state is missing but install marker exists', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    // Plant a marker (proxy for "pipelane has been here") but no
+    // mode-state file — the regression scenario the warn is for.
+    stateMod.ensureStateDir(commonDir, config);
+    rmSync(stateMod.modeStatePath(commonDir, config), { force: true });
+    assert.equal(stateMod.hasInstallMarker(commonDir, config), true);
+
+    const { result, stderr } = captureStderr(() => stateMod.loadModeState(commonDir, config));
+    assert.equal(result.mode, 'build', 'still falls back so the operator is unblocked');
+    assert.match(stderr, /WARNING.*missing but install marker exists/);
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('writeVersionedJsonFile injects schemaVersion envelope; readVersionedJsonFile strips it', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    const target = path.join(commonDir, config.stateDir, 'mode-state.json');
+    mkdirSync(path.dirname(target), { recursive: true });
+
+    stateMod.writeVersionedJsonFile('modeState', target, {
+      mode: 'release',
+      requestedSurfaces: [],
+      override: null,
+      updatedAt: '2026-04-26T00:00:00Z',
+    });
+
+    const onDisk = JSON.parse(readFileSync(target, 'utf8'));
+    assert.equal(onDisk.schemaVersion, 1, 'envelope must be on disk so future migrations have an anchor');
+    assert.equal(onDisk.mode, 'release');
+
+    const loaded = stateMod.readVersionedJsonFile('modeState', commonDir, config, target, null);
+    assert.equal(loaded.mode, 'release');
+    assert.equal(loaded.schemaVersion, undefined, 'envelope must be stripped before callers see the value');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('readVersionedJsonFile runs registered migrations forward in order', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    const target = path.join(commonDir, config.stateDir, 'mode-state.json');
+    mkdirSync(path.dirname(target), { recursive: true });
+
+    // Simulate a v0 file (no schemaVersion field — anything written
+    // before pipelane added the envelope) with an old shape.
+    writeFileSync(target, JSON.stringify({ legacyMode: 'release' }, null, 2), 'utf8');
+
+    // Temporarily register a v0 → v1 migration that maps the old
+    // shape into the current ModeState shape. Restore afterward so
+    // we don't leak state into other tests.
+    const original = stateMod.STATE_MIGRATIONS.modeState[0];
+    stateMod.STATE_MIGRATIONS.modeState[0] = (raw) => ({
+      mode: raw.legacyMode,
+      requestedSurfaces: [],
+      override: null,
+      updatedAt: null,
+    });
+    try {
+      const loaded = stateMod.readVersionedJsonFile('modeState', commonDir, config, target, null);
+      assert.equal(loaded.mode, 'release');
+      assert.equal(loaded.schemaVersion, undefined);
+    } finally {
+      if (original === undefined) delete stateMod.STATE_MIGRATIONS.modeState[0];
+      else stateMod.STATE_MIGRATIONS.modeState[0] = original;
+    }
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('saveModeState + loadModeState round-trip is stable across the schemaVersion envelope', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    const original = {
+      mode: 'release',
+      requestedSurfaces: ['frontend', 'edge'],
+      override: { reason: 'staging probes stale', timestamp: '2026-04-26T00:00:00Z' },
+      lastOverride: { reason: 'staging probes stale', setAt: '2026-04-26T00:00:00Z', setBy: 'tester' },
+      updatedAt: '2026-04-26T00:00:00Z',
+    };
+    stateMod.saveModeState(commonDir, config, original);
+    const loaded = stateMod.loadModeState(commonDir, config);
+    assert.equal(loaded.mode, original.mode);
+    assert.deepEqual(loaded.requestedSurfaces, original.requestedSurfaces);
+    assert.deepEqual(loaded.override, original.override);
+    assert.deepEqual(loaded.lastOverride, original.lastOverride);
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
