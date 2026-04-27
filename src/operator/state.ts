@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -563,6 +563,68 @@ const ACTION_STATE_FILENAME = 'action-state.json';
 const DEPLOY_CONFIG_FILENAME = 'deploy-config.json';
 const PROBE_STATE_FILENAME = 'probe-state.json';
 const TASK_LOCKS_DIRNAME = 'task-locks';
+const INSTALL_MARKER_FILENAME = 'installed.json';
+const LEGACY_MIGRATION_FILENAME = 'legacy-migration.json';
+
+// State-resilience invariants. Pipelane state lives at
+// `<commonDir>/<config.stateDir>/`, where `config.stateDir` defaults
+// to a value pipelane ships. When that default has been renamed in
+// the past — most recently `rocketboard-workflow` →
+// `pipelane-state` — every existing install silently re-initialized:
+// mode-state defaulted to 'build', probes were "missing" (release
+// gate fail-closed), deploy history looked empty. The fix has three
+// layers, all anchored on the constants below:
+//
+//   LEGACY_STATE_DIRS — fallback chain. When the canonical state
+//   dir has no install marker but a known-legacy dir exists with
+//   files, copy the orphaned files forward on first load. New
+//   legacy entries get added here as defaults are renamed.
+//
+//   INSTALL_MARKER_FILENAME — written into the canonical dir on
+//   first save (or on completed legacy migration). Distinguishes
+//   "fresh install" (no marker, silent default is correct) from
+//   "regression" (marker present, expected file missing —
+//   loud-warn instead of silent reset).
+//
+//   STATE_SCHEMA_VERSIONS / STATE_MIGRATIONS — every persisted
+//   state file gets a schemaVersion envelope. A future shape
+//   change registers a step in STATE_MIGRATIONS; loaders run them
+//   forward and rewrite on first load. Today the registry is
+//   empty (current shapes pinned as v1).
+//
+// Policy: the values here are public contract. Renaming a default
+// state path or filename requires a corresponding LEGACY_STATE_DIRS
+// entry; a breaking shape change requires a STATE_MIGRATIONS entry.
+// See REPO_GUIDANCE.md "State-resilience invariants".
+export const LEGACY_STATE_DIRS = ['rocketboard-workflow'];
+
+export const STATE_SCHEMA_VERSIONS = {
+  modeState: 1,
+  probeState: 1,
+  deployState: 1,
+  prState: 1,
+  actionState: 1,
+  deployConfig: 1,
+  taskLock: 1,
+} as const;
+
+export type StateKind = keyof typeof STATE_SCHEMA_VERSIONS;
+
+// Migration steps from version N to N+1, per state kind. A future
+// shape change (e.g. modeState v1 → v2) registers a function at
+// `STATE_MIGRATIONS.modeState[1]` mapping a v1 shape forward. Today
+// every shape is the v1 baseline; the registry exists so the next
+// breaking change has a tested home rather than a special case in
+// the loader.
+export const STATE_MIGRATIONS: Record<StateKind, Record<number, (raw: Record<string, unknown>) => Record<string, unknown>>> = {
+  modeState: {},
+  probeState: {},
+  deployState: {},
+  prState: {},
+  actionState: {},
+  deployConfig: {},
+  taskLock: {},
+};
 
 // v1.2: doctor.probe records. One entry per (environment, surface). Written
 // by `/doctor --probe` and read by the release-gate as a liveness check:
@@ -1143,6 +1205,12 @@ export function resolveSharedRepoRoot(commonDir: string): string {
 export function ensureStateDir(commonDir: string, config: WorkflowConfig): string {
   const stateDir = resolveStateDir(commonDir, config);
   mkdirSync(path.join(stateDir, TASK_LOCKS_DIRNAME), { recursive: true });
+  // Idempotent legacy migration runs before marker is planted so a
+  // successful copy doesn't get suppressed by the marker we'd
+  // otherwise plant first. Both calls are no-ops on subsequent
+  // invocations.
+  migrateLegacyStateDir(commonDir, config);
+  ensureInstallMarker(commonDir, config);
   return stateDir;
 }
 
@@ -1215,7 +1283,7 @@ export function resolveSmokeLockPath(commonDir: string, environment: SmokeEnviro
 }
 
 export function loadProbeState(commonDir: string, config: WorkflowConfig): ProbeState {
-  const raw = readJsonFile<ProbeState>(probeStatePath(commonDir, config), { records: [] as ProbeRecord[], updatedAt: '' });
+  const raw = readVersionedJsonFile<ProbeState>('probeState', commonDir, config, probeStatePath(commonDir, config), { records: [] as ProbeRecord[], updatedAt: '' });
   const normalized = normalizeProbeState(raw);
   const structurallyValid = normalized.records.filter((record) =>
     !record.urlFingerprint || record.urlFingerprint === computeUrlFingerprint(record.url)
@@ -1343,7 +1411,7 @@ function normalizeProbeState(raw: ProbeState): ProbeState {
 
 export function saveProbeState(commonDir: string, config: WorkflowConfig, value: ProbeState): void {
   ensureStateDir(commonDir, config);
-  writeJsonFile(probeStatePath(commonDir, config), value);
+  writeVersionedJsonFile('probeState', probeStatePath(commonDir, config), value);
 }
 
 export function taskLockPath(commonDir: string, config: WorkflowConfig, taskSlug: string): string {
@@ -1399,8 +1467,177 @@ export function writeJsonFile(targetPath: string, value: unknown): void {
   }
 }
 
+// State-resilience helpers. See "State-resilience invariants"
+// constants block above for the rationale.
+
+export function installMarkerPath(commonDir: string, config: WorkflowConfig): string {
+  return path.join(resolveStateDir(commonDir, config), INSTALL_MARKER_FILENAME);
+}
+
+export function legacyMigrationPath(commonDir: string, config: WorkflowConfig): string {
+  return path.join(resolveStateDir(commonDir, config), LEGACY_MIGRATION_FILENAME);
+}
+
+export function hasInstallMarker(commonDir: string, config: WorkflowConfig): boolean {
+  return existsSync(installMarkerPath(commonDir, config));
+}
+
+export function ensureInstallMarker(commonDir: string, config: WorkflowConfig): void {
+  const target = installMarkerPath(commonDir, config);
+  if (existsSync(target)) return;
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeJsonFile(target, { installedAt: nowIso() });
+}
+
+const missingStateWarnings = new Set<string>();
+
+function warnMissingStateAfterInstall(targetPath: string): void {
+  if (missingStateWarnings.has(targetPath)) return;
+  missingStateWarnings.add(targetPath);
+  process.stderr.write(
+    `[pipelane] WARNING: ${targetPath} is missing but install marker exists. `
+    + `Pipelane has previously written state at this location, so this is likely an upgrade `
+    + `regression (renamed config.stateDir, manual rm, etc.). Defaulting for this run; `
+    + `investigate before relying on the result.\n`,
+  );
+}
+
+const legacyMigrationLogged = new Set<string>();
+
+// One-shot best-effort migration from a known-legacy state dir into
+// the canonical one. Idempotent: skipped when the install marker is
+// already present (canonical install was created first), when an
+// audit file exists from a prior migration, or when no legacy dir
+// has any contents. File-level non-destructive: copies a legacy file
+// forward only when the canonical equivalent is absent, so any
+// fresh canonical state written post-rename keeps priority over
+// stale legacy data.
+export function migrateLegacyStateDir(commonDir: string, config: WorkflowConfig): void {
+  const canonicalDir = resolveStateDir(commonDir, config);
+  if (hasInstallMarker(commonDir, config)) return;
+  if (existsSync(legacyMigrationPath(commonDir, config))) return;
+
+  for (const legacyName of LEGACY_STATE_DIRS) {
+    if (legacyName === config.stateDir) continue;
+    const legacyDir = path.join(commonDir, legacyName);
+    if (!existsSync(legacyDir)) continue;
+
+    let entries: string[];
+    try {
+      entries = readdirSync(legacyDir);
+    } catch {
+      continue;
+    }
+    if (entries.length === 0) continue;
+
+    mkdirSync(canonicalDir, { recursive: true });
+    const copied: string[] = [];
+    for (const name of entries) {
+      const src = path.join(legacyDir, name);
+      const dst = path.join(canonicalDir, name);
+      if (existsSync(dst)) continue;
+      try {
+        // cpSync handles both files and directories with `recursive: true`.
+        cpSync(src, dst, { recursive: true });
+        copied.push(name);
+      } catch {
+        // Per-entry failures don't abort the run — the operator can
+        // re-attempt by deleting the partial canonical entry. We
+        // record what was copied successfully.
+      }
+    }
+
+    if (copied.length === 0) continue;
+
+    writeJsonFile(legacyMigrationPath(commonDir, config), {
+      from: legacyDir,
+      to: canonicalDir,
+      copiedAt: nowIso(),
+      entries: copied,
+    });
+    // Plant the install marker so subsequent loads know this dir is
+    // populated and the loud-warn path is armed for any genuinely
+    // missing files post-migration.
+    ensureInstallMarker(commonDir, config);
+
+    // De-dup so concurrent commands in the same process (the
+    // dashboard server hitting multiple loaders) don't each emit
+    // a copy of the migration banner.
+    if (!legacyMigrationLogged.has(canonicalDir)) {
+      legacyMigrationLogged.add(canonicalDir);
+      process.stderr.write(
+        `[pipelane] Migrated ${copied.length} legacy state file(s) from ${legacyDir} to ${canonicalDir}. `
+        + `The legacy directory is unchanged; remove it manually once you've confirmed pipelane behaves correctly.\n`,
+      );
+    }
+    // Stop after the first hit. Multiple legacy dirs at once would
+    // mean pipelane has been moved twice without a marker — an
+    // operator should resolve that manually rather than us guessing
+    // the order.
+    return;
+  }
+}
+
+// Wrap readJsonFile with schema-version migration and the
+// install-marker loud-warn. Strips the schemaVersion envelope so
+// callers see the clean shape and can pass it back to writers
+// without round-tripping the version field.
+//
+// `commonDir`+`config` are required because the warn-on-missing
+// behavior keys off the install marker, which lives inside the
+// canonical state dir. State files outside that dir (smoke history,
+// repo-tracked configs) should keep using readJsonFile directly.
+export function readVersionedJsonFile<T>(
+  kind: StateKind,
+  commonDir: string,
+  config: WorkflowConfig,
+  targetPath: string,
+  fallback: T,
+): T {
+  if (!existsSync(targetPath)) {
+    if (hasInstallMarker(commonDir, config)) {
+      warnMissingStateAfterInstall(targetPath);
+    }
+    return fallback;
+  }
+
+  const raw = readJsonFile<unknown>(targetPath, fallback as unknown);
+  if (raw === fallback) return fallback;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return raw as T;
+  }
+
+  let value = raw as Record<string, unknown>;
+  const onDiskVersion = typeof value.schemaVersion === 'number' ? value.schemaVersion : 0;
+  const targetVersion = STATE_SCHEMA_VERSIONS[kind];
+  const migrations = STATE_MIGRATIONS[kind];
+
+  for (let v = onDiskVersion; v < targetVersion; v++) {
+    const migrate = migrations[v];
+    if (migrate) value = migrate(value);
+  }
+
+  if ('schemaVersion' in value) {
+    const stripped = { ...value };
+    delete stripped.schemaVersion;
+    return stripped as T;
+  }
+  return value as T;
+}
+
+export function writeVersionedJsonFile(kind: StateKind, targetPath: string, value: unknown): void {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    writeJsonFile(targetPath, {
+      ...(value as Record<string, unknown>),
+      schemaVersion: STATE_SCHEMA_VERSIONS[kind],
+    });
+  } else {
+    writeJsonFile(targetPath, value);
+  }
+}
+
 export function loadModeState(commonDir: string, config: WorkflowConfig): ModeState {
-  const raw = readJsonFile<ModeState>(modeStatePath(commonDir, config), {
+  const raw = readVersionedJsonFile<ModeState>('modeState', commonDir, config, modeStatePath(commonDir, config), {
     mode: DEFAULT_MODE,
     requestedSurfaces: [...config.surfaces],
     override: null,
@@ -1439,29 +1676,29 @@ function normalizeModeState(raw: ModeState): ModeState {
 
 export function saveModeState(commonDir: string, config: WorkflowConfig, value: ModeState): void {
   ensureStateDir(commonDir, config);
-  writeJsonFile(modeStatePath(commonDir, config), value);
+  writeVersionedJsonFile('modeState', modeStatePath(commonDir, config), value);
 }
 
 export function loadDeployState(commonDir: string, config: WorkflowConfig): { records: DeployRecord[] } {
-  return readJsonFile(deployStatePath(commonDir, config), { records: [] as DeployRecord[] });
+  return readVersionedJsonFile('deployState', commonDir, config, deployStatePath(commonDir, config), { records: [] as DeployRecord[] });
 }
 
 export function saveDeployState(commonDir: string, config: WorkflowConfig, value: { records: DeployRecord[] }): void {
   ensureStateDir(commonDir, config);
-  writeJsonFile(deployStatePath(commonDir, config), value);
+  writeVersionedJsonFile('deployState', deployStatePath(commonDir, config), value);
 }
 
 export function loadPrState(commonDir: string, config: WorkflowConfig): { records: Record<string, PrRecord> } {
-  return readJsonFile(prStatePath(commonDir, config), { records: {} as Record<string, PrRecord> });
+  return readVersionedJsonFile('prState', commonDir, config, prStatePath(commonDir, config), { records: {} as Record<string, PrRecord> });
 }
 
 export function savePrState(commonDir: string, config: WorkflowConfig, value: { records: Record<string, PrRecord> }): void {
   ensureStateDir(commonDir, config);
-  writeJsonFile(prStatePath(commonDir, config), value);
+  writeVersionedJsonFile('prState', prStatePath(commonDir, config), value);
 }
 
 export function loadActionState(commonDir: string, config: WorkflowConfig): ActionState {
-  const raw = readJsonFile<ActionState>(actionStatePath(commonDir, config), { records: {} });
+  const raw = readVersionedJsonFile<ActionState>('actionState', commonDir, config, actionStatePath(commonDir, config), { records: {} });
   const records: Record<string, ActionRunRecord[]> = {};
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !raw.records || typeof raw.records !== 'object' || Array.isArray(raw.records)) {
     return { records };
@@ -1493,7 +1730,7 @@ export function loadActionState(commonDir: string, config: WorkflowConfig): Acti
 
 export function saveActionState(commonDir: string, config: WorkflowConfig, value: ActionState): void {
   ensureStateDir(commonDir, config);
-  writeJsonFile(actionStatePath(commonDir, config), value);
+  writeVersionedJsonFile('actionState', actionStatePath(commonDir, config), value);
 }
 
 export function appendActionRunRecord(commonDir: string, config: WorkflowConfig, record: ActionRunRecord): ActionRunRecord {
@@ -1527,12 +1764,12 @@ export function savePrRecord(commonDir: string, config: WorkflowConfig, taskSlug
 }
 
 export function loadTaskLock(commonDir: string, config: WorkflowConfig, taskSlug: string): TaskLock | null {
-  return readJsonFile(taskLockPath(commonDir, config, taskSlug), null);
+  return readVersionedJsonFile<TaskLock | null>('taskLock', commonDir, config, taskLockPath(commonDir, config, taskSlug), null);
 }
 
 export function saveTaskLock(commonDir: string, config: WorkflowConfig, taskSlug: string, value: TaskLock): TaskLock {
   ensureStateDir(commonDir, config);
-  writeJsonFile(taskLockPath(commonDir, config, taskSlug), value);
+  writeVersionedJsonFile('taskLock', taskLockPath(commonDir, config, taskSlug), value);
   return value;
 }
 
@@ -1554,8 +1791,13 @@ export function loadAllTaskLocks(commonDir: string, config: WorkflowConfig): Tas
     .filter((entry) => entry.endsWith('.json'))
     .map((entry) => {
       const targetPath = path.join(lockDir, entry);
-      return JSON.parse(readFileSync(targetPath, 'utf8')) as TaskLock;
+      // Route through readVersionedJsonFile so task locks written
+      // with a schemaVersion envelope (post-state-resilience) get
+      // migrated forward and the version field stripped before
+      // returning to consumers expecting the bare TaskLock shape.
+      return readVersionedJsonFile<TaskLock | null>('taskLock', commonDir, config, targetPath, null);
     })
+    .filter((entry): entry is TaskLock => entry !== null)
     .sort((left, right) => left.taskSlug.localeCompare(right.taskSlug));
 }
 
@@ -1567,6 +1809,11 @@ export function resolveWorkflowContext(cwd: string): WorkflowContext {
   const repoRoot = resolveRepoRoot(cwd);
   const config = loadWorkflowConfig(repoRoot);
   const commonDir = resolveGitCommonDir(repoRoot);
+  // Trigger legacy-state migration at the canonical entry point so
+  // read-only commands (/status, /landing-report) pull state forward
+  // even when no save runs in the same process. Idempotent: skipped
+  // when the install marker exists or no legacy dir has data.
+  migrateLegacyStateDir(commonDir, config);
   const modeState = loadModeState(commonDir, config);
   return {
     cwd,

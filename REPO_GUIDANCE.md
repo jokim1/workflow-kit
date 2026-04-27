@@ -76,6 +76,45 @@ cleaner approach failed.
   probes older than 24h flip the release lane fail-closed. Do not extend
   the freshness window without re-reading `docs/RELEASE_WORKFLOW.md`.
 
+## State-resilience invariants
+
+Pipelane state lives at `<commonDir>/<config.stateDir>/`. Three
+invariants protect already-installed consumers from silent state loss
+when pipelane upgrades. All three are anchored in `src/operator/state.ts`
+constants — touching any of them is a contract change.
+
+- **Defaults that govern on-disk paths are public contract.** The
+  shipping value of `defaultWorkflowConfig().stateDir`, every
+  `*_FILENAME` constant, every `*_DIRNAME` constant, and the migration
+  registry are part of the API surface. Renaming any of them is a
+  breaking change for every existing consumer — their state still lives
+  at the old path, and a silent rename re-initializes them. The 2026-04
+  rocketboard incident (mode-state orphaned, mode silently fell back to
+  'build') was this class of bug.
+- **Renames require a `LEGACY_STATE_DIRS` entry.** When the default
+  `stateDir` value changes, the previous value gets prepended to
+  `LEGACY_STATE_DIRS` in `state.ts`. `migrateLegacyStateDir` then walks
+  the chain on first run and copies orphaned files into the canonical
+  dir non-destructively. New `*_FILENAME` renames need a parallel
+  migration in the same function. Removing a legacy entry stranded
+  consumers — entries are forever, even years after the rename.
+- **Every state file carries a `schemaVersion` envelope.** Reads go
+  through `readVersionedJsonFile`, which strips the envelope; writes go
+  through `writeVersionedJsonFile`, which injects the current version
+  from `STATE_SCHEMA_VERSIONS`. A breaking shape change bumps the
+  version and registers a migration step at
+  `STATE_MIGRATIONS.<kind>[fromVersion]` — never an inline normalizer
+  in the loader. The registry is the only place migrations should live.
+- **Install-marker semantics distinguish fresh-install from
+  regression.** `installed.json` is planted by `ensureStateDir` on
+  first save and by `migrateLegacyStateDir` on a successful copy. Its
+  presence proves "pipelane has written state at this canonical dir."
+  Loaders fall back silently when the marker is absent (true fresh
+  install) and warn loudly via stderr when the marker is present but an
+  expected file is missing. Don't suppress that warning — it's the
+  signal that catches future migration drift before the operator's
+  release gate flips silently.
+
 ## Tech-stack rules
 
 ### Node / TypeScript

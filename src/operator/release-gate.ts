@@ -5,12 +5,13 @@ import path from 'node:path';
 import type { DeployRecord, ProbeEnvironment, ProbeRecord, ProbeState, WorkflowConfig } from './state.ts';
 import {
   deployConfigPath,
+  ensureStateDir,
   formatWorkflowCommand,
   loadWorkflowConfig,
   PROBE_STALE_MS,
-  readJsonFile,
+  readVersionedJsonFile,
   resolveGitCommonDir,
-  writeJsonFile,
+  writeVersionedJsonFile,
 } from './state.ts';
 import {
   DEPLOY_STATE_KEY_ENV,
@@ -290,7 +291,7 @@ export function loadDeployConfig(repoRoot: string): DeployConfig | null {
     }
 
     const config = loadWorkflowConfig(repoRoot);
-    const sharedState = readJsonFile<Partial<DeployConfig> | null>(deployConfigPath(commonDir, config), null);
+    const sharedState = readVersionedJsonFile<Partial<DeployConfig> | null>('deployConfig', commonDir, config, deployConfigPath(commonDir, config), null);
     const hydratedSharedState = sharedState ? hydrateDeployConfig(sharedState) : null;
     return isConfiguredDeployConfig(hydratedSharedState) ? hydratedSharedState : null;
   } catch {
@@ -301,7 +302,8 @@ export function loadDeployConfig(repoRoot: string): DeployConfig | null {
 export function saveSharedDeployConfig(repoRoot: string, deployConfig: DeployConfig): void {
   const commonDir = resolveGitCommonDir(repoRoot);
   const config = loadWorkflowConfig(repoRoot);
-  writeJsonFile(deployConfigPath(commonDir, config), deployConfig);
+  ensureStateDir(commonDir, config);
+  writeVersionedJsonFile('deployConfig', deployConfigPath(commonDir, config), deployConfig);
 }
 
 export function renderDeployConfigSection(config: DeployConfig): string {
