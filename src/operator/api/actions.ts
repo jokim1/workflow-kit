@@ -25,7 +25,7 @@ import {
   resolveDeployStateKey,
   verifyDeployRecord,
 } from '../release-gate.ts';
-import { findLastGoodDeploy, inferActiveTaskLock, resolveCommandSurfaces } from '../commands/helpers.ts';
+import { buildStaleBaseBlocker, findLastGoodDeploy, inferActiveTaskLock, resolveCommandSurfaces } from '../commands/helpers.ts';
 import {
   diagnoseTaskBinding,
   isTaskBindingRecovery,
@@ -44,6 +44,15 @@ import {
   consumeActionConfirmation,
   createActionConfirmation,
 } from './confirm-tokens.ts';
+import {
+  buildDestinationPlanForCommand,
+  destinationPlanFingerprintDigest,
+  type DestinationPlan,
+} from '../destination-planner.ts';
+import {
+  DESTINATION_APPROVED_ROUTE_FINGERPRINT_ENV,
+  DESTINATION_ROUTE_PROD_CONFIRMED_ENV,
+} from '../destination-executor.ts';
 
 export const STABLE_ACTION_IDS = [
   'new',
@@ -55,6 +64,10 @@ export const STABLE_ACTION_IDS = [
   'merge',
   'deploy.staging',
   'deploy.prod',
+  'route.merge',
+  'route.deploy.staging',
+  'route.smoke.staging',
+  'route.deploy.prod',
   'clean.plan',
   'clean.apply',
   // v1.2: doctor.* actions — both non-risky. doctor.diagnose is a pure
@@ -86,6 +99,10 @@ export const API_RISKY_ACTION_IDS: ReadonlySet<StableActionId> = new Set<StableA
   'clean.apply',
   'merge',
   'deploy.prod',
+  'route.merge',
+  'route.deploy.staging',
+  'route.smoke.staging',
+  'route.deploy.prod',
   'rollback.prod',
 ]);
 
@@ -101,6 +118,10 @@ const ACTION_LABELS: Record<StableActionId, string> = {
   merge: 'Merge PR',
   'deploy.staging': 'Deploy staging',
   'deploy.prod': 'Deploy production',
+  'route.merge': 'Take task to merge',
+  'route.deploy.staging': 'Take task to staging',
+  'route.smoke.staging': 'Take task to smoke passed',
+  'route.deploy.prod': 'Take task to production',
   'clean.plan': 'Plan cleanup',
   'clean.apply': 'Apply cleanup',
   'doctor.diagnose': 'Diagnose deploy configuration',
@@ -126,6 +147,7 @@ export interface ActionPreflightData {
     requiresConfirmation: boolean;
     confirmation: { token: string; expiresAt: string } | null;
     freshness: ReturnType<typeof buildFreshness>;
+    destinationPlan?: DestinationPlan;
   };
 }
 
@@ -143,7 +165,8 @@ export function isStableActionId(value: string): value is StableActionId {
 
 export function buildActionPreflightEnvelope(cwd: string, actionId: StableActionId, parsed: ParsedOperatorArgs): ApiEnvelope<ActionPreflightData> {
   const context = resolveWorkflowContext(cwd);
-  const normalizedInputs = normalizeInputs(actionId, parsed, cwd);
+  const destinationPlan = buildRoutePlanForAction(cwd, actionId, parsed);
+  const normalizedInputs = normalizeInputs(actionId, parsed, cwd, destinationPlan);
   const risky = API_RISKY_ACTION_IDS.has(actionId);
   const requiresConfirmation = actionRequiresConfirmation(actionId, normalizedInputs);
   const checkedAt = nowIso();
@@ -166,6 +189,7 @@ export function buildActionPreflightEnvelope(cwd: string, actionId: StableAction
         requiresConfirmation: false,
         confirmation: null,
         freshness: buildFreshness({ checkedAt, stale: true }),
+        ...(destinationPlan ? { destinationPlan } : {}),
       },
     };
     return buildApiEnvelope<ActionPreflightData>({
@@ -203,6 +227,7 @@ export function buildActionPreflightEnvelope(cwd: string, actionId: StableAction
       requiresConfirmation,
       confirmation,
       freshness: buildFreshness({ checkedAt }),
+      ...(destinationPlan ? { destinationPlan } : {}),
     },
   };
 
@@ -232,8 +257,35 @@ interface PreflightGateBlocked {
 }
 
 function evaluatePreflightGate(context: WorkflowContext, actionId: StableActionId, inputs: Record<string, unknown>): PreflightGateResult {
+  if (isRouteActionId(actionId)) {
+    const blockers = Array.isArray(inputs.routeBlockers)
+      ? inputs.routeBlockers.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : [];
+    if (blockers.length > 0) {
+      return {
+        allowed: false,
+        reason: blockers.join('; '),
+      };
+    }
+    const routeBlocker = routeBaseFreshnessBlocker(context, inputs);
+    if (routeBlocker) {
+      return {
+        allowed: false,
+        reason: routeBlocker,
+      };
+    }
+  }
   if (actionId === 'pr') {
     return evaluatePrPreflightGate(context, inputs);
+  }
+  if (actionId === 'merge' && !(typeof inputs.pr === 'string' && inputs.pr.trim())) {
+    const staleBaseBlocker = buildStaleBaseBlocker(context, 'merge');
+    if (staleBaseBlocker) {
+      return {
+        allowed: false,
+        reason: staleBaseBlocker,
+      };
+    }
   }
   if (actionId === 'clean.apply') {
     const taskRaw = inputs.task;
@@ -285,6 +337,22 @@ function evaluatePreflightGate(context: WorkflowContext, actionId: StableActionI
   return { allowed: true };
 }
 
+function routeBaseFreshnessBlocker(context: WorkflowContext, inputs: Record<string, unknown>): string {
+  const route = inputs.route && typeof inputs.route === 'object'
+    ? inputs.route as { routeSteps?: unknown }
+    : {};
+  const routeSteps = Array.isArray(route.routeSteps)
+    ? route.routeSteps.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  if (routeSteps.includes('pr')) {
+    return buildStaleBaseBlocker(context, 'pr');
+  }
+  if (routeSteps.includes('merge') && !(typeof inputs.pr === 'string' && inputs.pr.trim())) {
+    return buildStaleBaseBlocker(context, 'merge');
+  }
+  return '';
+}
+
 function evaluatePrPreflightGate(context: WorkflowContext, inputs: Record<string, unknown>): PreflightGateResult {
   const task = typeof inputs.task === 'string' ? inputs.task : '';
   const title = typeof inputs.title === 'string' ? inputs.title : '';
@@ -307,6 +375,13 @@ function evaluatePrPreflightGate(context: WorkflowContext, inputs: Record<string
         reason: error instanceof Error ? error.message : String(error),
       };
     }
+    const staleBaseBlocker = buildStaleBaseBlocker(context, 'pr');
+    if (staleBaseBlocker) {
+      return {
+        allowed: false,
+        reason: staleBaseBlocker,
+      };
+    }
     const titleRequirement = recover === 'use-current-checkout'
       ? resolveLocalPrTitleRequirement(context, diagnosis.taskSlug, diagnosis.current.branchName, title)
       : { required: false, defaultTitle: '' };
@@ -326,6 +401,13 @@ function evaluatePrPreflightGate(context: WorkflowContext, inputs: Record<string
 
   const diagnosis = diagnoseTaskBinding(context, task);
   if (diagnosis.status === 'resolved') {
+    const staleBaseBlocker = buildStaleBaseBlocker(context, 'pr');
+    if (staleBaseBlocker) {
+      return {
+        allowed: false,
+        reason: staleBaseBlocker,
+      };
+    }
     const titleRequirement = resolveLocalPrTitleRequirement(
       context,
       diagnosis.taskSlug,
@@ -417,7 +499,8 @@ function buildReleaseOverrideInputGate(reason: string): PreflightGateResult {
 
 export async function runActionExecute(cwd: string, actionId: StableActionId, parsed: ParsedOperatorArgs, confirmToken: string): Promise<ApiEnvelope<ActionExecutionData | ActionPreflightData>> {
   const context = resolveWorkflowContext(cwd);
-  const normalizedInputs = normalizeInputs(actionId, parsed, cwd);
+  const destinationPlan = buildRoutePlanForAction(cwd, actionId, parsed);
+  const normalizedInputs = normalizeInputs(actionId, parsed, cwd, destinationPlan);
   const risky = API_RISKY_ACTION_IDS.has(actionId);
   const requiresConfirmation = actionRequiresConfirmation(actionId, normalizedInputs);
   const checkedAt = nowIso();
@@ -447,6 +530,7 @@ export async function runActionExecute(cwd: string, actionId: StableActionId, pa
         requiresConfirmation: false,
         confirmation: null,
         freshness: buildFreshness({ checkedAt, stale: true }),
+        ...(destinationPlan ? { destinationPlan } : {}),
       },
     };
     return buildApiEnvelope<ActionPreflightData>({
@@ -479,6 +563,7 @@ export async function runActionExecute(cwd: string, actionId: StableActionId, pa
           requiresConfirmation,
           confirmation: null,
           freshness: buildFreshness({ checkedAt, stale: true }),
+          ...(destinationPlan ? { destinationPlan } : {}),
         },
       };
       return buildApiEnvelope<ActionPreflightData>({
@@ -493,7 +578,7 @@ export async function runActionExecute(cwd: string, actionId: StableActionId, pa
   const startedAt = nowIso();
   const result = actionId === 'git.catchupBase'
     ? runCatchupBase(cwd)
-    : runCliWithJson(cwd, buildUnderlyingArgs(actionId, parsed), buildChildEnv(actionId));
+    : runCliWithJson(cwd, buildUnderlyingArgs(actionId, parsed), buildChildEnv(actionId, destinationPlan));
   const finishedAt = nowIso();
   const failureReason = result.ok ? '' : describeExecutionFailure(actionId, result);
 
@@ -513,6 +598,7 @@ export async function runActionExecute(cwd: string, actionId: StableActionId, pa
       requiresConfirmation,
       confirmation: null,
       freshness: buildFreshness({ checkedAt, stale: !result.ok }),
+      ...(destinationPlan ? { destinationPlan } : {}),
     },
     execution: {
       exitCode: result.exitCode,
@@ -637,7 +723,41 @@ function actionRequiresConfirmation(actionId: StableActionId, normalizedInputs: 
     && normalizedInputs.recover.trim().length > 0;
 }
 
-function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs, cwd?: string): Record<string, unknown> {
+function isRouteActionId(actionId: StableActionId): boolean {
+  return actionId === 'route.merge'
+    || actionId === 'route.deploy.staging'
+    || actionId === 'route.smoke.staging'
+    || actionId === 'route.deploy.prod';
+}
+
+function buildRoutePlanForAction(cwd: string, actionId: StableActionId, parsed: ParsedOperatorArgs): DestinationPlan | null {
+  if (!isRouteActionId(actionId)) return null;
+  try {
+    return buildDestinationPlanForCommand(cwd, parsedForRouteAction(actionId, parsed));
+  } catch {
+    return null;
+  }
+}
+
+function parsedForRouteAction(actionId: StableActionId, parsed: ParsedOperatorArgs): ParsedOperatorArgs {
+  if (actionId === 'route.merge') {
+    return { command: 'merge', positional: [], flags: parsed.flags };
+  }
+  if (actionId === 'route.deploy.staging') {
+    return { command: 'deploy', positional: ['staging'], flags: parsed.flags };
+  }
+  if (actionId === 'route.smoke.staging') {
+    return { command: 'smoke', positional: ['staging'], flags: parsed.flags };
+  }
+  return { command: 'deploy', positional: ['prod'], flags: parsed.flags };
+}
+
+function normalizeInputs(
+  actionId: StableActionId,
+  parsed: ParsedOperatorArgs,
+  cwd?: string,
+  destinationPlan?: DestinationPlan | null,
+): Record<string, unknown> {
   const { flags } = parsed;
   switch (actionId) {
     case 'new':
@@ -670,6 +790,22 @@ function normalizeInputs(actionId: StableActionId, parsed: ParsedOperatorArgs, c
         surfaces: flags.surfaces,
         skipSmokeCoverage: flags.skipSmokeCoverage,
         reason: flags.reason,
+      };
+    case 'route.merge':
+    case 'route.deploy.staging':
+    case 'route.smoke.staging':
+    case 'route.deploy.prod':
+      return {
+        task: flags.task,
+        pr: flags.pr,
+        sha: flags.sha,
+        surfaces: flags.surfaces,
+        title: flags.title,
+        message: flags.message,
+        skipSmokeCoverage: flags.skipSmokeCoverage,
+        reason: flags.reason,
+        route: destinationPlan?.fingerprintInputs,
+        routeBlockers: destinationPlan?.blockers ?? ['route could not be planned'],
       };
     case 'clean.plan':
       return {};
@@ -807,6 +943,17 @@ function buildUnderlyingArgs(actionId: StableActionId, parsed: ParsedOperatorArg
   const pushSurfaces = () => {
     if (flags.surfaces.length > 0) args.push('--surfaces', flags.surfaces.join(','));
   };
+  const pushRouteTaskOrPr = () => {
+    if (flags.pr.trim()) {
+      pushOpt('--pr', flags.pr);
+      return;
+    }
+    pushOpt('--task', flags.task);
+  };
+  const pushRoutePrMetadata = () => {
+    pushOpt('--title', flags.title);
+    pushOpt('--message', flags.message);
+  };
 
   switch (actionId) {
     case 'new':
@@ -861,6 +1008,34 @@ function buildUnderlyingArgs(actionId: StableActionId, parsed: ParsedOperatorArg
       if (flags.skipSmokeCoverage) args.push('--skip-smoke-coverage');
       pushOpt('--reason', flags.reason);
       break;
+    case 'route.merge':
+      args.push('merge', '--yes');
+      pushRouteTaskOrPr();
+      pushRoutePrMetadata();
+      break;
+    case 'route.deploy.staging':
+      args.push('deploy', 'staging', '--yes');
+      pushRouteTaskOrPr();
+      pushRoutePrMetadata();
+      pushOpt('--sha', flags.sha);
+      pushSurfaces();
+      break;
+    case 'route.smoke.staging':
+      args.push('smoke', 'staging', '--yes');
+      pushRouteTaskOrPr();
+      pushRoutePrMetadata();
+      pushOpt('--sha', flags.sha);
+      pushSurfaces();
+      break;
+    case 'route.deploy.prod':
+      args.push('deploy', 'prod', '--yes');
+      pushRouteTaskOrPr();
+      pushRoutePrMetadata();
+      pushOpt('--sha', flags.sha);
+      pushSurfaces();
+      if (flags.skipSmokeCoverage) args.push('--skip-smoke-coverage');
+      pushOpt('--reason', flags.reason);
+      break;
     case 'clean.plan':
       args.push('clean', '--status-only');
       break;
@@ -902,23 +1077,28 @@ const TEST_HOOK_ENV_KEYS = [
   'PIPELANE_CLEAN_MIN_AGE_MS',
   'PIPELANE_CHECKS_SUPABASE_SECRETS_STUB',
   'PIPELANE_CHECKS_GH_SECRETS_STUB',
-  // v1.2: doctor.probe (dispatched via the API) re-reads the deploy config
-  // and runs real fetches. Neither doctor stub should pass through from a
-  // parent board/CI shell. The stubs are also gated on NODE_ENV==='test' at
-  // the CLI; scrubbing here is belt-and-suspenders.
-  // PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS is intentionally NOT scrubbed —
-  // the API→CLI deploy.prod flow relies on it passing through (see
-  // "api action deploy.prod --execute bypasses the TTY prompt via the API env var").
+  // v1.2: doctor.probe/fix stubs are unit-test hooks for API-only lanes.
+  // Deploy verification stubs remain NODE_ENV=test-gated in deploy.ts and
+  // must flow through API action tests so those children exercise the same
+  // deploy path without a real GitHub Actions run.
   'PIPELANE_DOCTOR_PROBE_STUB_STATUS',
   'PIPELANE_DOCTOR_FIX_STUB',
 ];
 
-function buildChildEnv(actionId: StableActionId): NodeJS.ProcessEnv {
+function buildChildEnv(actionId: StableActionId, destinationPlan?: DestinationPlan | null): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of TEST_HOOK_ENV_KEYS) {
     delete env[key];
   }
-  if (actionId === 'deploy.prod' || actionId === 'rollback.prod') {
+  delete env[DESTINATION_APPROVED_ROUTE_FINGERPRINT_ENV];
+  delete env[DESTINATION_ROUTE_PROD_CONFIRMED_ENV];
+  if (isRouteActionId(actionId) && destinationPlan) {
+    env[DESTINATION_APPROVED_ROUTE_FINGERPRINT_ENV] = destinationPlanFingerprintDigest(destinationPlan);
+  }
+  if (actionId === 'route.deploy.prod') {
+    env[DESTINATION_ROUTE_PROD_CONFIRMED_ENV] = '1';
+    delete env.PIPELANE_DEPLOY_PROD_API_CONFIRMED;
+  } else if (actionId === 'deploy.prod' || actionId === 'rollback.prod') {
     // Both deploy.prod and rollback.prod's CLI shims require human
     // confirmation via requireProdConfirmation. The API path has already
     // proved humanness via the HMAC confirm-token consume above, so tell
@@ -1024,13 +1204,15 @@ function gitActionResult(ok: boolean, exitCode: number, stdout: string, stderr: 
 function resolveCliEntry(): string {
   // In dev the module loads as src/operator/api/actions.ts; in a packed
   // build it's dist/operator/api/actions.js. Either way, cli.(ts|js)
-  // lives two directories up. Prefer the compiled entry when present —
-  // faster startup and matches what consumers run via the pipelane bin.
+  // lives at the kit root. Source-mode parents must spawn source-mode
+  // children, otherwise stale dist output can execute different route logic.
   const here = fileURLToPath(import.meta.url);
   const kitRoot = path.resolve(path.dirname(here), '..', '..', '..');
+  const srcCli = path.join(kitRoot, 'src', 'cli.ts');
+  if (here.includes(`${path.sep}src${path.sep}`)) return srcCli;
   const distCli = path.join(kitRoot, 'dist', 'cli.js');
   if (existsSync(distCli)) return distCli;
-  return path.join(kitRoot, 'src', 'cli.ts');
+  return srcCli;
 }
 
 export function parseApiActionFlags(argv: string[]): { execute: boolean; confirmToken: string; rest: string[] } {

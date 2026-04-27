@@ -9,6 +9,5 @@ CLAUDE.md
 
 # Internal docs (specs, strategy, interim notes). Public docs live under docs/public/.
 docs/*
-!docs/SMOKE_HOT_PATHS_PLAN.md
 !docs/public/
 .gstack/

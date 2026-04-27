@@ -422,7 +422,9 @@ When the branch is ready for a PR, let Pipelane prepare it:
 ```
 
 `/pr` runs the repo's configured pre-PR checks, commits, pushes, and opens or
-updates the PR. Then use the review stack again:
+updates the PR. It refreshes `origin/<base>` first and stops if the task branch
+is behind the configured base branch, because that stale diff can make review
+and merge include upstream reversions. Then use the review stack again:
 
 ```text
 /review

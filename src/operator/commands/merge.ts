@@ -14,6 +14,7 @@ import {
 } from '../state.ts';
 import {
   buildSmokeHandoffMessage,
+  buildStaleBaseBlocker,
   deriveTaskSlugFromPr,
   ensureTaskLockMatchesCurrent,
   inferActiveTaskLock,
@@ -27,14 +28,24 @@ import {
   watchPrChecks,
 } from './helpers.ts';
 import { dispatchDeploy } from './deploy.ts';
+import { maybeHandleDestinationCommand } from './destination.ts';
+import { DESTINATION_INTERNAL_STEP_ENV } from '../destination-executor.ts';
 
 export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Promise<void> {
+  if (await maybeHandleDestinationCommand(cwd, parsed)) return;
+
   const context = resolveWorkflowContext(cwd);
   const mergeContext = resolveMergeCommandContext(context, parsed);
   const { taskSlug, lock, prBranchName, pr, surfaces } = mergeContext;
   const currentBranchName = runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim() ?? '';
   const currentHeadSha = runGit(context.repoRoot, ['rev-parse', '--verify', 'HEAD'], true)?.trim() ?? '';
   assertPrIsOpenForMerge(pr);
+  if (!parsed.flags.pr.trim() || currentBranchName === prBranchName) {
+    const staleBaseBlocker = buildStaleBaseBlocker(context, 'merge');
+    if (staleBaseBlocker) {
+      throw new Error(staleBaseBlocker);
+    }
+  }
 
   watchPrChecks(context.repoRoot, pr.number);
   runGh(context.repoRoot, ['pr', 'merge', String(pr.number), '--squash']);
@@ -83,7 +94,10 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
     'Local base checkouts were not changed.',
   ];
 
-  const autoDeployOnMerge = context.modeState.mode === 'build' && context.config.buildMode.autoDeployOnMerge;
+  const destinationRouteStep = process.env[DESTINATION_INTERNAL_STEP_ENV] === '1';
+  const autoDeployOnMerge = context.modeState.mode === 'build'
+    && context.config.buildMode.autoDeployOnMerge
+    && !destinationRouteStep;
 
   if (autoDeployOnMerge) {
     const deploy = await dispatchDeploy(cwd, parsed, {
@@ -103,9 +117,14 @@ export async function handleMerge(cwd: string, parsed: ParsedOperatorArgs): Prom
     lines.push(`Next: verify production, then run ${formatWorkflowCommand(context.config, 'clean')}.`);
   } else if (context.modeState.mode === 'build') {
     setNextAction(context.commonDir, context.config, taskSlug, `merged at ${shortSha}, run ${formatWorkflowCommand(context.config, 'deploy', 'prod')}`);
-    lines.push('Build mode auto-deploy is disabled for this repo.');
-    lines.push('Stay in this task worktree and dispatch production from here.');
-    lines.push(`Next: run ${formatWorkflowCommand(context.config, 'deploy', 'prod')}.`);
+    if (destinationRouteStep && context.config.buildMode.autoDeployOnMerge) {
+      lines.push('Build mode auto-deploy is handled by the approved destination route.');
+      lines.push('The route will dispatch production from this task worktree.');
+    } else {
+      lines.push('Build mode auto-deploy is disabled for this repo.');
+      lines.push('Stay in this task worktree and dispatch production from here.');
+      lines.push(`Next: run ${formatWorkflowCommand(context.config, 'deploy', 'prod')}.`);
+    }
   } else {
     // Release-mode merge. Smoke-aware handoff: tell the operator to deploy
     // staging next and, based on whether smoke is configured/required/

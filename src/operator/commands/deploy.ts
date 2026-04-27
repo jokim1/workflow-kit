@@ -4,6 +4,8 @@ import { acquireSmokeEnvironmentLock, evaluateSmokeCoverage, findLatestSmokeRun,
 import {
   buildReleaseCheckMessage,
   computeDeployConfigFingerprint,
+  describeRequestedDeployRecord,
+  disqualifyDeployRecord,
   emptyDeployConfig,
   evaluateReleaseReadiness,
   loadDeployConfig,
@@ -12,6 +14,7 @@ import {
   signDeployRecord,
   verifyDeployRecord,
 } from '../release-gate.ts';
+import { listMissingDeployConfiguration } from '../deploy-config-validation.ts';
 import {
   formatWorkflowCommand,
   loadDeployState,
@@ -55,7 +58,9 @@ import {
   type LivePr,
   updatePromotedWithoutStagingSmoke,
 } from './helpers.ts';
+import { maybeHandleDestinationCommand } from './destination.ts';
 import { observeFrontendRuntime, toDeployRuntimeObservation } from '../runtime-observation.ts';
+import { DESTINATION_APPROVED_TARGET_SHA_ENV, DESTINATION_INTERNAL_STEP_ENV } from '../destination-executor.ts';
 
 function surfacesKey(surfaces: string[]): string {
   return [...surfaces].sort().join(',');
@@ -76,92 +81,27 @@ function findMatchingSucceededDeploy(options: {
     && record.environment === options.environment
     && record.sha === options.sha
     && surfacesKey(record.surfaces) === key
-    && (!record.taskSlug || record.taskSlug === options.taskSlug)
+    && record.taskSlug === options.taskSlug
   ) ?? null;
 }
 
-// v1.2: per-surface verification + fingerprint + signature check for the
-// prod-gate record. Returns the first reason the record fails to qualify, or
-// null when everything checks out. Keeps the prod gate as tight as the
-// staging-readiness gate.
-function disqualifyStagingRecord(options: {
-  record: DeployRecord;
-  surfaces: string[];
-  expectedFingerprint: string;
-  stateKey: string | undefined;
-}): string | null {
-  const { record, surfaces, expectedFingerprint, stateKey } = options;
-  if (!record.verifiedAt) {
-    return `record lacks verifiedAt timestamp (status "${record.status ?? 'unknown'}" without verified probe)`;
-  }
-  if (record.configFingerprint && record.configFingerprint !== expectedFingerprint) {
-    return 'deploy config has drifted since this record was written; re-run staging to re-register';
-  }
-  if (!record.configFingerprint) {
-    return 'record lacks configFingerprint (legacy pre-v1.2 record, cannot prove config parity)';
-  }
-  if (stateKey && !verifyDeployRecord(record, stateKey)) {
-    return 'HMAC signature missing or invalid under PIPELANE_DEPLOY_STATE_KEY';
-  }
-  for (const surface of surfaces) {
-    const probe = record.verificationBySurface?.[surface];
-    if (!probe) {
-      if (surface === 'frontend' && record.verification) {
-        // Legacy aggregate-only verification (pre-per-surface). Only accepts
-        // frontend, matching hasObservedStagingSuccess's legacy fallback.
-        const code = record.verification.statusCode;
-        if (typeof code !== 'number' || code < 200 || code >= 300) {
-          return `frontend: legacy verification is non-2xx (${code ?? 'missing'})`;
-        }
-        continue;
-      }
-      return `${surface}: no per-surface verification recorded`;
-    }
-    const code = probe.statusCode;
-    if (typeof code !== 'number' || code < 200 || code >= 300) {
-      return `${surface}: healthcheck returned ${code ?? 'no status'}`;
-    }
-  }
-  return null;
-}
-
-function deployEnvironmentLabel(environment: 'staging' | 'prod'): 'staging' | 'production' {
-  return environment === 'prod' ? 'production' : 'staging';
-}
-
-function listMissingDeployConfiguration(options: {
-  config: ReturnType<typeof emptyDeployConfig>;
+function findMatchingRequestedDeploy(options: {
+  records: DeployRecord[];
   environment: 'staging' | 'prod';
+  sha: string;
   surfaces: string[];
-  defaultWorkflowName: string;
-}): string[] {
-  const missing = new Set<string>();
-  const label = deployEnvironmentLabel(options.environment);
-  const frontend = options.environment === 'staging'
-    ? options.config.frontend.staging
-    : options.config.frontend.production;
-
-  if (!frontend.deployWorkflow && !options.defaultWorkflowName) {
-    missing.add(`frontend ${label} deploy workflow`);
-  }
-
-  for (const surface of options.surfaces) {
-    if (surface === 'frontend') {
-      if (!frontend.url && !frontend.deployWorkflow && !options.defaultWorkflowName) {
-        missing.add(`frontend ${label} URL or deploy workflow`);
-      }
-      if (!resolveSurfaceHealthcheckUrl(options.config, options.environment, surface)) {
-        missing.add(`frontend ${label} health check`);
-      }
-      continue;
-    }
-
-    if (!resolveSurfaceHealthcheckUrl(options.config, options.environment, surface)) {
-      missing.add(`${surface} ${label} health check`);
-    }
-  }
-
-  return [...missing];
+  taskSlug: string;
+  idempotencyKey: string;
+}): DeployRecord | null {
+  const key = surfacesKey(options.surfaces);
+  return [...options.records].reverse().find((record) =>
+    record.status === 'requested'
+    && record.environment === options.environment
+    && record.sha === options.sha
+    && record.taskSlug === options.taskSlug
+    && surfacesKey(record.surfaces) === key
+    && record.idempotencyKey === options.idempotencyKey,
+  ) ?? null;
 }
 
 function buildDeployConfigurationError(options: {
@@ -303,7 +243,8 @@ export async function dispatchDeploy(
     environment,
     surfaces,
     defaultWorkflowName: context.config.deployWorkflowName,
-  }).filter((entry) => !allowHealthcheckStubBypass || !entry.endsWith('health check'));
+    allowHealthcheckStubBypass,
+  });
   if (missingConfig.length > 0) {
     throw new Error(buildDeployConfigurationError({
       environment,
@@ -312,14 +253,20 @@ export async function dispatchDeploy(
       deployCommand: formatWorkflowCommand(context.config, 'deploy'),
     }));
   }
-  const target = resolveDeployTargetForTask({
-    repoRoot: context.repoRoot,
-    baseBranch: context.config.baseBranch,
-    explicitSha: parsed.flags.sha,
-    prRecord,
-    mode: context.modeState.mode,
-    config: context.config,
-  });
+  const routeApprovedBuildSha = process.env[DESTINATION_INTERNAL_STEP_ENV] === '1'
+    && context.modeState.mode === 'build'
+    ? (process.env[DESTINATION_APPROVED_TARGET_SHA_ENV] ?? '').trim()
+    : '';
+  const target = routeApprovedBuildSha
+    ? { sha: routeApprovedBuildSha, ref: 'destination-route' }
+    : resolveDeployTargetForTask({
+      repoRoot: context.repoRoot,
+      baseBranch: context.config.baseBranch,
+      explicitSha: parsed.flags.sha,
+      prRecord,
+      mode: context.modeState.mode,
+      config: context.config,
+    });
   const asyncRequested = options.async ?? parsed.flags.async;
   const smokeConfig = resolveSmokeConfig(context.config);
   const requestedSmokeCoverageOverrideReason = parsed.flags.skipSmokeCoverage
@@ -380,7 +327,7 @@ export async function dispatchDeploy(
     }
     // v1.2: tighten the prod gate with the same per-surface + fingerprint +
     // signature invariants as the staging-readiness gate.
-    const disqualification = disqualifyStagingRecord({
+    const disqualification = disqualifyDeployRecord({
       record: staging,
       surfaces,
       // The record being checked is a STAGING record, so compare its stored
@@ -409,16 +356,24 @@ export async function dispatchDeploy(
       }
       const qualifyingSmoke = findQualifyingSmokeRun({
         commonDir: context.commonDir,
+        repoRoot: context.repoRoot,
         config: context.config,
         environment: 'staging',
         sha: target.sha,
+        taskSlug,
+        surfaces,
+        deployIdempotencyKey: staging.idempotencyKey,
       });
       if (!qualifyingSmoke) {
         const latestSmoke = findLatestSmokeRun({
           commonDir: context.commonDir,
+          repoRoot: context.repoRoot,
           config: context.config,
           environment: 'staging',
           sha: target.sha,
+          taskSlug,
+          surfaces,
+          deployIdempotencyKey: staging.idempotencyKey,
         });
         if (latestSmoke && !isSmokeSuccessStatus(latestSmoke.status)) {
           throw new Error([
@@ -476,6 +431,25 @@ export async function dispatchDeploy(
       configFingerprint: computeDeployConfigFingerprint(deployConfig, environment),
     });
 
+    const existingRequested = findMatchingRequestedDeploy({
+      records: trustedRecords,
+      environment,
+      sha: target.sha,
+      surfaces,
+      taskSlug,
+      idempotencyKey,
+    });
+    if (existingRequested) {
+      const requested = describeRequestedDeployRecord(existingRequested);
+      if (requested?.inFlight) {
+        throw new Error([
+          `deploy ${environment} blocked: deploy is already in flight for ${target.sha.slice(0, 7)}.`,
+          requested.reason,
+          'Wait for it to finish before retrying this deploy.',
+        ].join('\n'));
+      }
+    }
+
     // Short-circuit: if we already have a succeeded deploy with this key,
     // don't re-dispatch. Return the existing record. Uses trusted records so
     // an attacker can't plant a sig-invalid success to DoS legitimate deploys.
@@ -486,7 +460,15 @@ export async function dispatchDeploy(
       surfaces,
       taskSlug,
     });
-    if (existingSucceeded && existingSucceeded.idempotencyKey === idempotencyKey) {
+    const existingDisqualification = existingSucceeded
+      ? disqualifyDeployRecord({
+        record: existingSucceeded,
+        surfaces,
+        expectedFingerprint: computeDeployConfigFingerprint(deployConfig, environment),
+        stateKey,
+      })
+      : null;
+    if (existingSucceeded && !existingDisqualification && existingSucceeded.idempotencyKey === idempotencyKey) {
       return {
         ...existingSucceeded,
         environment,
@@ -731,6 +713,8 @@ export async function dispatchDeploy(
 }
 
 export async function handleDeploy(cwd: string, parsed: ParsedOperatorArgs): Promise<void> {
+  if (await maybeHandleDestinationCommand(cwd, parsed)) return;
+
   const result = await dispatchDeploy(cwd, parsed);
   printResult(parsed.flags, result);
 }
@@ -871,8 +855,8 @@ export function watchWorkflowRun(
 ): { ok: boolean; reason?: string } {
   // Test hook: stub wins over missing runId so tests don't need to mock
   // `gh run list` just to exercise the verify path.
-  if (process.env.PIPELANE_DEPLOY_WATCH_STUB === 'succeeded') return { ok: true };
-  if (process.env.PIPELANE_DEPLOY_WATCH_STUB === 'failed') return { ok: false, reason: 'stubbed failure' };
+  if (process.env.NODE_ENV === 'test' && process.env.PIPELANE_DEPLOY_WATCH_STUB === 'succeeded') return { ok: true };
+  if (process.env.NODE_ENV === 'test' && process.env.PIPELANE_DEPLOY_WATCH_STUB === 'failed') return { ok: false, reason: 'stubbed failure' };
 
   if (!runId) {
     return { ok: false, reason: 'could not resolve workflow run id from gh run list' };
@@ -977,7 +961,7 @@ function promptForProdConfirmPrefix(fullSha: string, expected: string): Promise<
 }
 
 export async function probeHealthcheck(url: string): Promise<DeployVerification> {
-  if (process.env.PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS) {
+  if (process.env.NODE_ENV === 'test' && process.env.PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS) {
     const statusCode = Number(process.env.PIPELANE_DEPLOY_HEALTHCHECK_STUB_STATUS);
     return {
       healthcheckUrl: url,
@@ -988,6 +972,7 @@ export async function probeHealthcheck(url: string): Promise<DeployVerification>
   }
 
   const intervalMs = Number(process.env.PIPELANE_DEPLOY_HEALTHCHECK_INTERVAL_MS ?? '10000');
+  const timeoutMs = Number(process.env.PIPELANE_DEPLOY_HEALTHCHECK_TIMEOUT_MS ?? '5000');
   let lastStatus = 0;
   let lastLatency = 0;
   let lastError: string | undefined;
@@ -998,7 +983,10 @@ export async function probeHealthcheck(url: string): Promise<DeployVerification>
     }
     const started = Date.now();
     try {
-      const response = await fetch(url, { method: 'GET' });
+      const response = await fetch(url, {
+        method: 'GET',
+        signal: AbortSignal.timeout(Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 5000),
+      });
       lastStatus = response.status;
       lastLatency = Date.now() - started;
       if (response.status < 200 || response.status >= 300) {

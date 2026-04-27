@@ -105,11 +105,12 @@ Every mutating workflow step is exposed as a stable action ID. Callers
 whether a confirm token is required); `action <id> --execute` with the
 returned token to actually run it.
 
-Risky actions (`merge`, `deploy.prod`, `clean.apply`, `rollback.prod`)
-always require a fresh confirmation token. `pr` remains non-risky in the
-normal path, but a task-binding recovery choice returns a confirmation token
-so the selected checkout and fingerprint are consumed atomically. Other
-non-risky actions complete in one call.
+Risky actions (`merge`, `deploy.prod`, `route.merge`,
+`route.deploy.staging`, `route.smoke.staging`, `route.deploy.prod`,
+`clean.apply`, `rollback.prod`) always require a fresh confirmation token.
+`pr` remains non-risky in the normal path, but a task-binding recovery choice
+returns a confirmation token so the selected checkout and fingerprint are
+consumed atomically. Other non-risky actions complete in one call.
 
 | Action ID | Risky? | Purpose |
 |-----------|--------|---------|
@@ -122,6 +123,10 @@ non-risky actions complete in one call.
 | `merge` | **yes** | Squash-merge the PR and delete the branch. |
 | `deploy.staging` | no | Deploy the merged SHA to staging. |
 | `deploy.prod` | **yes** | Deploy the merged SHA to production. |
+| `route.merge` | **yes** | Run the remaining destination route steps through merge. |
+| `route.deploy.staging` | **yes** | Run the remaining destination route steps through staging deploy. |
+| `route.smoke.staging` | **yes** | Run the remaining destination route steps through staging smoke. |
+| `route.deploy.prod` | **yes** | Run the remaining destination route steps through production deploy. |
 | `clean.plan` | no | Preview workspace cleanup. |
 | `clean.apply` | **yes** | Apply stale workspace cleanup with an explicit scope such as `allStale`. |
 | `doctor.diagnose` | no | Read CLAUDE.md, detect platform, list missing config + probe status. |
@@ -136,6 +141,12 @@ into the next preflight request after the user selects that option. This is
 how `/pr` presents safe task-binding recovery choices such as "use current
 checkout" (only from a task-owned branch) or "continue the attached task
 workspace" without showing hidden recovery flags.
+
+Preflight for `pr`, task-branch `merge`, and route actions that would run
+`/pr` or `/merge` refreshes `origin/<base>` and returns `allowed:false` when
+the checkout is behind the configured base branch. Clients should surface the
+reason and have the operator rebase before retrying, rather than confirming
+or executing a stale route.
 
 `doctor.fix` is intentionally **not** exposed as an API action — it is
 interactive (TTY prompts for platform + URLs) and lives behind

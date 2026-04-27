@@ -145,6 +145,8 @@ Refuses to start the same task slug twice and points you at `/resume`.
 
 **`/pr`** — [v0-hardened] Before committing it:
 
+- Refreshes `origin/<base>` and fails closed when the task branch is behind
+  the configured base, so review cannot include upstream reversions
 - Prints the list of files about to be staged
 - Denies `CLAUDE.md`, `.env*`, `*.pem`, and anything matching `.gitignore`
   patterns unless `--force-include <path>` is passed
@@ -155,6 +157,8 @@ Refuses to start the same task slug twice and points you at `/resume`.
 
 **`/merge`** — [v0-hardened]:
 
+- Refreshes `origin/<base>` and fails closed when the task branch is behind
+  the configured base, before `gh pr merge` is called
 - Prompts `Merge PR #<n>: "<title>" → main? [y/N]`
 - Runs `gh pr merge --squash --delete-branch`
 - **Polls** `gh pr view` until `mergeCommit.oid` resolves (bounded 30s)

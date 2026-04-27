@@ -16,11 +16,14 @@ import {
   runGit,
 } from '../state.ts';
 import {
+  computeDeployConfigFingerprint,
+  disqualifyDeployRecord,
   emptyDeployConfig,
   evaluateReleaseReadiness,
   explainSurfaceProbe,
   isReleaseManagedSurface,
   loadDeployConfig,
+  resolveDeployStateKey,
   resolveSurfaceProbeUrl,
   unsupportedSurfaceReason,
   type DeployConfig,
@@ -235,12 +238,17 @@ export async function buildWorkflowApiSnapshot(cwd: string): Promise<ApiEnvelope
   const activeLock = locks.find((lock) => lock.branchName === currentBranch) ?? null;
   const currentPrRecord = activeLock ? prState.records[activeLock.taskSlug] ?? null : null;
   const stagingSmokeStatus = resolveStagingSmokeStatus({
+    repoRoot: context.repoRoot,
     commonDir: context.commonDir,
     config: context.config,
     mode,
     smokeConfig,
     latestRecord: smokeLatest.staging,
     currentPrRecord,
+    deployRecords: deployState.records,
+    deployConfig,
+    taskSlug: activeLock?.taskSlug ?? currentPrRecord?.taskSlug ?? undefined,
+    surfaces: activeLock?.surfaces?.length ? activeLock.surfaces : requestedSurfaces,
   });
 
   const branches = buildBranchRows({
@@ -569,12 +577,17 @@ interface StagingSmokeStatus {
 }
 
 function resolveStagingSmokeStatus(options: {
+  repoRoot: string;
   commonDir: string;
   config: WorkflowConfig;
   mode: string;
   smokeConfig: ReturnType<typeof resolveSmokeConfig>;
   latestRecord: SmokeRunRecord | null;
   currentPrRecord: PrRecord | null;
+  deployRecords: DeployRecord[];
+  deployConfig: DeployConfig;
+  taskSlug?: string;
+  surfaces: string[];
 }): StagingSmokeStatus {
   const gateBlocking = options.mode === 'release' && options.smokeConfig.requireStagingSmoke;
   const latestSummary = describeSmokeSummary(options.latestRecord, 'staging');
@@ -595,11 +608,39 @@ function resolveStagingSmokeStatus(options: {
   }
 
   const targetSha = options.currentPrRecord.mergedSha.trim();
+  const stagingDeploy = findQualifiedStagingDeployForSnapshot({
+    deployRecords: options.deployRecords,
+    deployConfig: options.deployConfig,
+    sha: targetSha,
+    taskSlug: options.taskSlug,
+    surfaces: options.surfaces,
+  });
+  if (!stagingDeploy) {
+    return {
+      state: 'blocked',
+      blocking: true,
+      reason: `no verified staging deploy for current promotion SHA ${shortSha(targetSha)} and surfaces ${options.surfaces.join(', ')}`,
+      observedAt: options.latestRecord?.finishedAt,
+      issue: buildApiIssue({
+        code: 'smoke.staging.deploy_missing',
+        severity: 'error',
+        message: `No verified staging deploy found for current promotion SHA ${shortSha(targetSha)} and surfaces ${options.surfaces.join(', ')}. Run \`${formatWorkflowCommand(options.config, 'deploy', 'staging')}\`.`,
+        source: 'smokeLatest',
+        blocking: true,
+        lane: 'staging',
+        action: 'deploy.staging',
+      }),
+    };
+  }
   const qualifyingRecord = findQualifyingSmokeRun({
     commonDir: options.commonDir,
+    repoRoot: options.repoRoot,
     config: options.config,
     environment: 'staging',
     sha: targetSha,
+    taskSlug: options.taskSlug,
+    surfaces: options.surfaces,
+    deployIdempotencyKey: stagingDeploy.idempotencyKey,
   });
   if (qualifyingRecord) {
     return {
@@ -613,9 +654,13 @@ function resolveStagingSmokeStatus(options: {
 
   const latestForTarget = findLatestSmokeRun({
     commonDir: options.commonDir,
+    repoRoot: options.repoRoot,
     config: options.config,
     environment: 'staging',
     sha: targetSha,
+    taskSlug: options.taskSlug,
+    surfaces: options.surfaces,
+    deployIdempotencyKey: stagingDeploy.idempotencyKey,
   });
 
   if (!latestForTarget) {
@@ -682,6 +727,34 @@ function resolveStagingSmokeStatus(options: {
     observedAt: options.latestRecord?.finishedAt,
     issue: latestIssue,
   };
+}
+
+function findQualifiedStagingDeployForSnapshot(options: {
+  deployRecords: DeployRecord[];
+  deployConfig: DeployConfig;
+  sha: string;
+  taskSlug?: string;
+  surfaces: string[];
+}): DeployRecord | null {
+  const expectedFingerprint = computeDeployConfigFingerprint(options.deployConfig, 'staging');
+  const stateKey = resolveDeployStateKey();
+  const surfaceKey = [...options.surfaces].sort().join(',');
+  for (let index = options.deployRecords.length - 1; index >= 0; index -= 1) {
+    const record = options.deployRecords[index];
+    if (record.environment !== 'staging') continue;
+    if (record.sha !== options.sha) continue;
+    if (options.taskSlug && record.taskSlug !== options.taskSlug) continue;
+    if ([...(record.surfaces ?? [])].sort().join(',') !== surfaceKey) continue;
+    const reason = disqualifyDeployRecord({
+      record,
+      surfaces: options.surfaces,
+      expectedFingerprint,
+      stateKey,
+    });
+    if (!reason) return record;
+    return null;
+  }
+  return null;
 }
 
 function buildLatestStagingSmokeIssue(options: {

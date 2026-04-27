@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
-import path from 'node:path';
 
 import {
   inferTaskSlugsFromBranchName as inferTaskSlugsFromBranchNameFromHelpers,
@@ -22,15 +20,12 @@ import {
   type WorkflowConfig,
   type WorkflowContext,
 } from './state.ts';
+import { readWorktreeStatusSnapshot } from './worktree-status.ts';
 
 export const TASK_BINDING_RECOVERY_VALUES = [
   'use-current-checkout',
   'continue-attached-workspace',
 ] as const;
-
-const STATUS_DIGEST_MAX_FILE_BYTES = 1024 * 1024;
-const STATUS_DIGEST_SAMPLE_BYTES = 64 * 1024;
-const STATUS_DIGEST_MAX_CONTENT_PATHS = 512;
 
 interface ReadWorktreeSnapshotOptions {
   includeStatusDigest?: boolean;
@@ -55,6 +50,8 @@ export interface TaskBindingWorktreeSnapshot {
   statusDigest: string;
   dirty: boolean;
   statusEntryCount: number;
+  statusDigestReliable: boolean;
+  statusDigestWarnings: string[];
 }
 
 export type TaskBindingDiagnosis =
@@ -250,9 +247,9 @@ export function diagnoseTaskBinding(context: WorkflowContext, explicitTask = '')
     reason: buildRecoveryReason(taskSlug, mismatches),
   };
 
+  const currentRecoveryBlocker = currentCheckoutRecoveryBlocker(context, diagnosis);
   const options = buildRecoveryOptions(context, diagnosis);
   if (options.length === 0) {
-    const currentBlocker = currentCheckoutRecoveryBlocker(context, diagnosis);
     const attachedBlocker = diagnosis.attached.exists
       ? ''
       : `Attached task workspace is missing: ${diagnosis.lock.worktreePath}`;
@@ -264,7 +261,7 @@ export function diagnoseTaskBinding(context: WorkflowContext, explicitTask = '')
       lock,
       reason: [
         `Cannot recover task ${taskSlug} from this checkout.`,
-        currentBlocker,
+        currentRecoveryBlocker,
         attachedBlocker,
         'Switch to a task-owned branch or recreate the attached task workspace before retrying.',
       ].filter(Boolean).join('\n'),
@@ -274,6 +271,14 @@ export function diagnoseTaskBinding(context: WorkflowContext, explicitTask = '')
 
   return {
     ...diagnosis,
+    reason: currentRecoveryBlocker
+      ? [
+        diagnosis.reason,
+        '',
+        'Current checkout rebind is unavailable:',
+        currentRecoveryBlocker,
+      ].join('\n')
+      : diagnosis.reason,
     options,
   };
 }
@@ -542,6 +547,13 @@ function currentCheckoutRecoveryBlocker(
   if (!taskBranchMatches(context.config, diagnosis.taskSlug, branchName)) {
     return `Current branch ${branchName} does not belong to task ${diagnosis.taskSlug}.`;
   }
+  if (diagnosis.current.dirty && !diagnosis.current.statusDigestReliable) {
+    return [
+      'Current checkout dirty state is too large or opaque to approve safely.',
+      ...diagnosis.current.statusDigestWarnings.map((warning) => `- ${warning}`),
+      'Clean up the checkout or move the work into a bounded, inspectable set of files before rebinding this task.',
+    ].join('\n');
+  }
   return '';
 }
 
@@ -583,6 +595,8 @@ function pickSnapshotForFingerprint(snapshot: TaskBindingWorktreeSnapshot): Reco
     statusDigest: snapshot.statusDigest,
     dirty: snapshot.dirty,
     statusEntryCount: snapshot.statusEntryCount,
+    statusDigestReliable: snapshot.statusDigestReliable,
+    statusDigestWarnings: snapshot.statusDigestWarnings,
   };
 }
 
@@ -590,163 +604,7 @@ function readWorktreeSnapshot(
   repoRoot: string,
   options: ReadWorktreeSnapshotOptions = {},
 ): TaskBindingWorktreeSnapshot {
-  const normalizedRoot = normalizePath(repoRoot);
-  if (!existsSync(normalizedRoot)) {
-    return {
-      repoRoot: normalizedRoot,
-      exists: false,
-      branchName: '',
-      commonDir: '',
-      head: '',
-      statusDigest: '',
-      dirty: false,
-      statusEntryCount: 0,
-    };
-  }
-
-  const branchName = runGit(normalizedRoot, ['branch', '--show-current'], true)?.trim() ?? '';
-  const commonDirRaw = runGit(normalizedRoot, ['rev-parse', '--git-common-dir'], true)?.trim() ?? '';
-  const commonDir = commonDirRaw ? normalizePath(path.resolve(normalizedRoot, commonDirRaw)) : '';
-  const head = runGit(normalizedRoot, ['rev-parse', 'HEAD'], true)?.trim() ?? '';
-  const statusRaw = runGit(normalizedRoot, ['status', '--porcelain=v1', '-z'], true) ?? '';
-
-  return {
-    repoRoot: normalizedRoot,
-    exists: true,
-    branchName,
-    commonDir,
-    head,
-    statusDigest: commonDir && options.includeStatusDigest ? computeWorktreeStatusDigest(normalizedRoot, statusRaw) : '',
-    dirty: statusRaw.length > 0,
-    statusEntryCount: statusRaw.split('\0').filter(Boolean).length,
-  };
-}
-
-function computeWorktreeStatusDigest(repoRoot: string, statusRaw: string): string {
-  const hash = createHash('sha256');
-  hash.update('status\0');
-  hash.update(statusRaw);
-  hash.update('\0diff-raw\0');
-  hash.update(runGit(repoRoot, ['diff', '--raw', '--full-index', '-z'], true) ?? '');
-  hash.update('\0cached-raw\0');
-  hash.update(runGit(repoRoot, ['diff', '--cached', '--raw', '--full-index', '-z'], true) ?? '');
-  hash.update('\0paths\0');
-
-  const paths = new Set(parseStatusPaths(statusRaw));
-  const untrackedRaw = runGit(repoRoot, ['ls-files', '--others', '--exclude-standard', '-z'], true) ?? '';
-  for (const relativePath of untrackedRaw.split('\0').filter(Boolean)) {
-    paths.add(relativePath);
-  }
-
-  const sortedPaths = [...paths].sort();
-  hash.update(`count:${sortedPaths.length}\0`);
-  hash.update('metadata\0');
-  for (const relativePath of sortedPaths) {
-    hash.update(relativePath);
-    hash.update('\0');
-    hashPathMetadataForStatus(hash, repoRoot, relativePath);
-    hash.update('\0');
-  }
-
-  hash.update('content\0');
-  for (const relativePath of sortedPaths.slice(0, STATUS_DIGEST_MAX_CONTENT_PATHS)) {
-    hash.update(relativePath);
-    hash.update('\0');
-    hashPathContentForStatus(hash, repoRoot, relativePath);
-    hash.update('\0');
-  }
-  if (sortedPaths.length > STATUS_DIGEST_MAX_CONTENT_PATHS) {
-    hash.update(`truncated-content-paths:${sortedPaths.length - STATUS_DIGEST_MAX_CONTENT_PATHS}\0`);
-  }
-
-  return hash.digest('hex');
-}
-
-function parseStatusPaths(statusRaw: string): string[] {
-  const entries = statusRaw.split('\0').filter(Boolean);
-  const paths: string[] = [];
-
-  for (let index = 0; index < entries.length; index += 1) {
-    const entry = entries[index];
-    const xy = entry.slice(0, 2);
-    const relativePath = entry.length > 3 ? entry.slice(3) : '';
-    if (!relativePath) {
-      continue;
-    }
-    paths.push(relativePath);
-    if (xy[0] === 'R' || xy[0] === 'C') {
-      index += 1;
-    }
-  }
-
-  return paths;
-}
-
-function hashPathMetadataForStatus(hash: ReturnType<typeof createHash>, repoRoot: string, relativePath: string): void {
-  const targetPath = path.join(repoRoot, relativePath);
-  try {
-    const stat = lstatSync(targetPath);
-    hash.update(stat.isDirectory() ? 'dir' : stat.isSymbolicLink() ? 'symlink' : stat.isFile() ? 'file' : 'other');
-    hash.update(`:${stat.mode}:${stat.size}:${Math.trunc(stat.mtimeMs)}:`);
-    if (stat.isSymbolicLink()) {
-      hash.update(readlinkSync(targetPath));
-      return;
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    hash.update(`unreadable:${message}`);
-  }
-}
-
-function hashPathContentForStatus(hash: ReturnType<typeof createHash>, repoRoot: string, relativePath: string): void {
-  const targetPath = path.join(repoRoot, relativePath);
-  try {
-    const stat = lstatSync(targetPath);
-    if (stat.isFile()) {
-      hashBoundedFileContent(hash, targetPath, stat.size);
-    } else {
-      hash.update('no-file-content');
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    hash.update(`unreadable:${message}`);
-  }
-}
-
-function hashBoundedFileContent(hash: ReturnType<typeof createHash>, targetPath: string, size: number): void {
-  const fd = openSync(targetPath, 'r');
-  try {
-    if (size <= STATUS_DIGEST_MAX_FILE_BYTES) {
-      hash.update('full:');
-      hashFileRange(hash, fd, 0, size);
-      return;
-    }
-
-    const sampleSize = Math.min(STATUS_DIGEST_SAMPLE_BYTES, size);
-    hash.update(`sampled:${sampleSize}:`);
-    hashFileRange(hash, fd, 0, sampleSize);
-    hash.update(':tail:');
-    hashFileRange(hash, fd, Math.max(0, size - sampleSize), sampleSize);
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function hashFileRange(hash: ReturnType<typeof createHash>, fd: number, start: number, length: number): void {
-  const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, Math.max(1, length)));
-  let remaining = length;
-  let position = start;
-
-  while (remaining > 0) {
-    const bytesToRead = Math.min(buffer.length, remaining);
-    const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
-    if (bytesRead <= 0) {
-      break;
-    }
-    hash.update(buffer.subarray(0, bytesRead));
-    remaining -= bytesRead;
-    position += bytesRead;
-  }
+  return readWorktreeStatusSnapshot(repoRoot, options);
 }
 
 function canonicalize(value: unknown): unknown {

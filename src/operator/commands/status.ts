@@ -1,5 +1,6 @@
 import { buildWorkflowApiSnapshot, type BranchRow, type SnapshotData } from '../api/snapshot.ts';
 import type { ApiEnvelope, ApiIssue, LaneState, SourceHealthEntry } from '../api/envelope.ts';
+import { bucketPathsBySurface } from '../surface-map.ts';
 import {
   loadAllTaskLocks,
   loadDeployState,
@@ -865,27 +866,7 @@ export function buildBlastView(
     .filter(Boolean);
 
   const map = config.surfacePathMap ?? {};
-  // Precompute normalized patterns once so matchSurface doesn't re-sort
-  // keys or recompute directory suffixes per file (O(F × K log K) → O(K
-  // log K + F × K)). Also normalize backslashes to forward slashes on
-  // both sides — git emits forward slashes on every platform but Windows
-  // authors writing surfacePathMap may use backslashes, which would
-  // otherwise silently send every file to `other`.
-  const normalizedMap = buildNormalizedSurfaceMap(map);
-  const surfaceBuckets: Record<string, string[]> = {};
-  const other: string[] = [];
-  for (const file of files) {
-    const normalizedFile = toPosixPath(file);
-    const matched = matchSurfaceFast(normalizedFile, normalizedMap);
-    if (matched) {
-      if (!surfaceBuckets[matched]) surfaceBuckets[matched] = [];
-      surfaceBuckets[matched].push(file);
-    } else {
-      other.push(file);
-    }
-  }
-  for (const list of Object.values(surfaceBuckets)) list.sort();
-  other.sort();
+  const { surfaces, other } = bucketPathsBySurface(files, map);
 
   const hint =
     Object.keys(map).length === 0
@@ -897,7 +878,7 @@ export function buildBlastView(
     sha,
     resolvedSha,
     base,
-    surfaces: surfaceBuckets,
+    surfaces,
     other,
     totalFiles: files.length,
     hint,
@@ -941,61 +922,6 @@ export function renderBlastView(view: BlastView): string {
     lines.push(`  hint: ${view.hint}`);
   }
   return lines.join('\n');
-}
-
-// Map a surface map to a pre-normalized list used by matchSurfaceFast.
-// Keys are pre-sorted alphabetically so iteration order is deterministic
-// across Node versions (Object.keys is insertion-ordered per spec, but
-// stable sort makes the choice explicit for the overlap-tiebreak case).
-// Each pattern is classified as exact-file vs directory-prefix once,
-// avoiding the endsWith/`+ '/'` recomputation on every file.
-interface NormalizedSurface {
-  surface: string;
-  exactFiles: Set<string>;
-  dirPrefixes: string[];
-}
-function buildNormalizedSurfaceMap(map: Record<string, string[]>): NormalizedSurface[] {
-  const surfaces = Object.keys(map).sort();
-  return surfaces.map((surface) => {
-    const exactFiles = new Set<string>();
-    const dirPrefixes: string[] = [];
-    for (const rawPattern of map[surface] ?? []) {
-      if (!rawPattern) continue;
-      const pattern = toPosixPath(rawPattern);
-      if (pattern.endsWith('/')) {
-        dirPrefixes.push(pattern);
-      } else {
-        // A pattern with a path separator but no trailing slash could be
-        // either an exact file (`openapi.yaml`) or a directory (`src/foo`).
-        // Accept both interpretations: try exact first, then as dir prefix.
-        exactFiles.add(pattern);
-        dirPrefixes.push(`${pattern}/`);
-      }
-    }
-    return { surface, exactFiles, dirPrefixes };
-  });
-}
-
-// Match a POSIX-normalized file path against the pre-normalized surface
-// list. Surfaces are tried in alphabetical order of key name, first hit
-// wins. When two surfaces overlap on the same file the alphabetically
-// earlier surface wins; design maps so patterns don't overlap if that
-// matters for your use case.
-function matchSurfaceFast(file: string, surfaces: NormalizedSurface[]): string | null {
-  for (const { surface, exactFiles, dirPrefixes } of surfaces) {
-    if (exactFiles.has(file)) return surface;
-    for (const prefix of dirPrefixes) {
-      if (file.startsWith(prefix)) return surface;
-    }
-  }
-  return null;
-}
-
-function toPosixPath(file: string): string {
-  // git emits forward slashes on every platform but surfacePathMap
-  // authors on Windows may naturally write backslashes. Normalize so
-  // either style works.
-  return file.replace(/\\/g, '/');
 }
 
 // ─────────────────────────────────────────────────────────────────────

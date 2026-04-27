@@ -58,6 +58,12 @@ cleaner approach failed.
   any new persisted state must use the same primitive. Non-atomic writes
   leave consumer repos with corrupt state on crash. Open follow-up in
   `docs/TODO.md` — Batch 2.
+- **State paths and schemas are compatibility contracts.** The default
+  state dir and persisted state file shapes are public to installed
+  consumers. Renaming a state dir requires a `LEGACY_STATE_DIRS` migration;
+  changing persisted state shape requires `STATE_SCHEMA_VERSIONS` /
+  `STATE_MIGRATIONS` coverage and versioned reads/writes. Silent fallback
+  to default state can bypass release-mode gates on upgraded repos.
 - **Symlinked `node_modules` warns on every setup.** Prevents `npm ci`
   wipe when working in a worktree that symlinks back to the main repo's
   `node_modules`. Added in 9d71d66; do not weaken the warning.

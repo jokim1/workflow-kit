@@ -121,6 +121,21 @@ function commitAll(repoRoot, message) {
   execFileSync('git', ['push'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
+function advanceRemoteMain(remoteRoot, fileName, content = 'advance main\n') {
+  const updaterRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-updater-'));
+  try {
+    execFileSync('git', ['clone', remoteRoot, updaterRoot], { stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['config', 'user.email', 'codex@example.com'], { cwd: updaterRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['config', 'user.name', 'Codex'], { cwd: updaterRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    writeFileSync(path.join(updaterRoot, fileName), content, 'utf8');
+    execFileSync('git', ['add', '.'], { cwd: updaterRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['commit', '-m', 'Advance remote main'], { cwd: updaterRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: updaterRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+  } finally {
+    rmSync(updaterRoot, { recursive: true, force: true });
+  }
+}
+
 function switchToLegacyProjectWorkflowConfig(repoRoot) {
   const configPath = path.join(repoRoot, '.pipelane.json');
   const legacyConfigPath = path.join(repoRoot, '.project-workflow.json');
@@ -1029,6 +1044,45 @@ test('smoke staging runs the configured command, injects env vars, and surfaces 
   }
 });
 
+test('smoke staging treats a newer requested deploy as pending before older successes', async () => {
+  const repoRoot = createRepo();
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    mkdirSync(path.join(repoRoot, 'e2e'), { recursive: true });
+    writeFileSync(path.join(repoRoot, 'e2e', 'auth.spec.ts'), "test('@smoke-auth sign in', async () => {});\n", 'utf8');
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.smoke = {
+        staging: {
+          command: smokeResultCommand([{ tag: '@smoke-auth', status: 'passed' }]),
+        },
+      };
+    });
+    const sha = '1111111111111111111111111111111111111111';
+    await writeSucceededDeployRecord(repoRoot, 'staging', sha, ['frontend']);
+    appendDeployRecord(repoRoot, {
+      environment: 'staging',
+      sha,
+      surfaces: ['frontend'],
+      workflowName: 'Deploy Hosted',
+      requestedAt: new Date().toISOString(),
+      status: 'requested',
+      idempotencyKey: 'newer-request',
+      triggeredBy: 'test',
+    });
+
+    runCli(['run', 'smoke', 'plan'], repoRoot);
+    const result = runCli(['run', 'smoke', 'staging', '--json'], repoRoot, {}, true);
+
+    assert.equal(result.status, 1);
+    assert.match(`${result.stdout}\n${result.stderr}`, /staging deploy is still in flight/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('smoke staging summary names every registered check with its registry description', async () => {
   const repoRoot = createRepo();
 
@@ -1757,6 +1811,13 @@ test('install-codex outside a pipelane repo installs durable global default skil
     assert.ok(existsSync(path.join(codexHome, 'skills', 'pipelane-fix', 'SKILL.md')));
     const fixSkill = readFileSync(path.join(codexHome, 'skills', 'fix', 'SKILL.md'), 'utf8');
     assert.match(fixSkill, /Pipelane-enabled repo detection/);
+    assert.match(fixSkill, /Resolve `<base>` from the Pipelane config first/);
+    assert.match(fixSkill, /package\.json:pipelane\.baseBranch/);
+    assert.doesNotMatch(fixSkill, /Resolve the default branch with `git symbolic-ref refs\/remotes\/origin\/HEAD`/);
+    assert.match(fixSkill, /DRIFT DETECTED/);
+    assert.match(fixSkill, /1\. Rebase onto origin\/<base>, then fix the findings\./);
+    assert.match(fixSkill, /2\. Continue without rebasing for now\./);
+    assert.doesNotMatch(fixSkill, /Continue review anyway/);
     assert.match(fixSkill, /standalone `REPO_GUIDANCE\.md` does not count/);
     assert.match(fixSkill, /Only emit these in Pipelane-enabled repos/);
     assert.ok(existsSync(path.join(codexHome, 'skills', '.pipelane', 'bin', 'pipelane')));
@@ -4743,6 +4804,17 @@ function localBranchExists(repoRoot, branchName) {
   }).status === 0;
 }
 
+function appendDeployRecord(repoRoot, record) {
+  const stateDir = path.join(resolveCommonDir(repoRoot), 'pipelane-state');
+  mkdirSync(stateDir, { recursive: true });
+  const existingPath = path.join(stateDir, 'deploy-state.json');
+  const existing = existsSync(existingPath)
+    ? JSON.parse(readFileSync(existingPath, 'utf8'))
+    : { records: [] };
+  existing.records.push(record);
+  writeFileSync(existingPath, `${JSON.stringify(existing, null, 2)}\n`, 'utf8');
+}
+
 async function writeSucceededDeployRecord(repoRoot, environment, sha, surfaces = ['frontend'], options = {}) {
   const stateDir = path.join(resolveCommonDir(repoRoot), 'pipelane-state');
   mkdirSync(stateDir, { recursive: true });
@@ -6199,23 +6271,168 @@ test('pr, merge, deploy, and task-lock work with a fake gh adapter', () => {
     assert.equal(merged.mergedSha, 'deadbeefcafebabe');
     assert.match(merged.message, /Production deploy dispatched via Deploy Hosted/);
 
-    const deployed = JSON.parse(runCli(['run', 'deploy', 'prod', '--async', '--json'], created.worktreePath, env).stdout);
-    assert.equal(deployed.environment, 'prod');
-    assert.equal(deployed.sha, 'deadbeefcafebabe');
-    assert.equal(deployed.status, 'requested');
-    assert.equal(deployed.taskSlug, 'api-work');
-    assert.ok(deployed.idempotencyKey, 'record carries an idempotencyKey');
+    const duplicateDeploy = runCli(['run', 'deploy', 'prod', '--async', '--json'], created.worktreePath, env, true);
+    assert.equal(duplicateDeploy.status, 1);
+    assert.match(duplicateDeploy.stderr, /deploy is already in flight/);
 
     const ghState = JSON.parse(readFileSync(ghStateFile, 'utf8'));
     assert.equal(ghState.prMergeCalls.length, 1);
     assert.ok(!ghState.prMergeCalls[0].includes('--delete-branch'));
-    assert.equal(ghState.workflows.length, 2);
+    assert.equal(ghState.workflows.length, 1);
     assert.equal(ghState.workflows[0].name, 'Deploy Hosted');
     assert.ok(ghState.workflows[0].args.includes('environment=production'));
     assert.ok(ghState.workflows[0].args.includes('sha=deadbeefcafebabe'));
     assert.ok(ghState.workflows[0].args.includes('surfaces=frontend,edge,sql'));
     assert.ok(ghState.workflows[0].args.includes('bypass_staging_guard=true'));
-    assert.ok(ghState.workflows[1].args.includes('bypass_staging_guard=true'));
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('pr blocks stale task branches before committing or opening review', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.prePrChecks = [];
+    });
+    commitAll(repoRoot, 'Adopt pipelane');
+
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Stale Review', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
+    advanceRemoteMain(remoteRoot, 'remote-pr.txt');
+
+    const result = runCli(['run', 'pr', '--title', 'Stale Review', '--json'], created.worktreePath, env, true);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /\/pr blocked because this checkout is behind origin\/main by 1 commit/);
+    assert.match(result.stderr, /git rebase origin\/main/);
+
+    assert.match(run('git', ['status', '--short'], created.worktreePath), /feature\.txt/);
+    assert.match(run('git', ['log', '--oneline', '-1'], created.worktreePath), /Adopt pipelane/);
+    assert.equal(existsSync(ghStateFile), false, 'stale /pr should not call gh before the rebase');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('merge blocks stale task branches before calling gh merge', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.prePrChecks = [];
+      config.buildMode.autoDeployOnMerge = false;
+    });
+    commitAll(repoRoot, 'Adopt pipelane');
+
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Stale Merge', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
+    runCli(['run', 'pr', '--title', 'Stale Merge', '--json'], created.worktreePath, env);
+    advanceRemoteMain(remoteRoot, 'remote-merge.txt');
+
+    const result = runCli(['run', 'merge', '--json'], created.worktreePath, env, true);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /\/merge blocked because this checkout is behind origin\/main by 1 commit/);
+    assert.match(result.stderr, /git rebase origin\/main/);
+
+    const ghState = JSON.parse(readFileSync(ghStateFile, 'utf8'));
+    assert.equal(ghState.prMergeCalls.length, 0, 'stale /merge should not call gh pr merge');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
+test('api action preflight blocks stale PR preparation before issuing actions', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.prePrChecks = [];
+    });
+    commitAll(repoRoot, 'Adopt pipelane');
+
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Stale Api Review', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
+    advanceRemoteMain(remoteRoot, 'remote-api-pr.txt');
+
+    const preflight = runCli(
+      ['run', 'api', 'action', 'pr', '--title', 'Stale Api Review'],
+      created.worktreePath,
+      {},
+      true,
+    );
+    assert.equal(preflight.status, 1);
+    const envelope = JSON.parse(preflight.stdout);
+    assert.equal(envelope.data.preflight.allowed, false);
+    assert.equal(envelope.data.preflight.state, 'blocked');
+    assert.equal(envelope.data.preflight.confirmation, null);
+    assert.match(envelope.data.preflight.reason, /\/pr blocked because this checkout is behind origin\/main by 1 commit/);
+    assert.match(envelope.data.preflight.reason, /git rebase origin\/main/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+  }
+});
+
+test('destination routes surface stale base before route confirmation or child steps', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.prePrChecks = [];
+    });
+    commitAll(repoRoot, 'Adopt pipelane');
+
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Stale Route', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'hello\n', 'utf8');
+    advanceRemoteMain(remoteRoot, 'remote-route.txt');
+
+    const result = runCli(
+      ['run', 'deploy', 'prod', '--title', 'Stale Route', '--yes', '--json'],
+      created.worktreePath,
+      env,
+      true,
+    );
+    assert.equal(result.status, 1);
+    const plan = JSON.parse(result.stdout);
+    assert.ok(
+      plan.blockers.some((blocker) => /\/pr blocked because this checkout is behind origin\/main by 1 commit/.test(blocker)),
+      'route plan should block stale base before executing child steps',
+    );
+    assert.equal(plan.execution, undefined);
+    assert.equal(existsSync(ghStateFile), false, 'stale route should not call gh before the rebase');
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
@@ -6322,7 +6539,8 @@ test('lockless PR branch can report, merge by PR number, and deploy the merged P
 
     const openDeploy = runCli(['run', 'deploy', 'staging', '--pr', '1', '--json'], repoRoot, env, true);
     assert.equal(openDeploy.status, 1);
-    assert.match(openDeploy.stderr, /can only use merged PRs/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /\/merge -> \/deploy staging/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /needs confirmation/);
     assert.equal(existsSync(lockPath), false, 'failed lockless deploy must not recreate the task lock');
 
     const currentBranch = run('git', ['branch', '--show-current'], repoRoot);
@@ -6830,10 +7048,13 @@ test('deploy prod blocks when release-mode staging lacks a succeeded record', ()
     runCli(['run', 'pr', '--title', 'Prod Gate', '--json'], created.worktreePath, env);
     runCli(['run', 'merge', '--json'], created.worktreePath, env);
 
-    const blocked = runCli(['run', 'deploy', 'prod', '--async', '--json'], created.worktreePath, env, true);
+    const blocked = runCli(['run', 'deploy', 'prod', '--async', '--json'], created.worktreePath, {
+      ...env,
+      PIPELANE_DESTINATION_INTERNAL_STEP: '1',
+    }, true);
     assert.equal(blocked.status, 1);
-    assert.match(blocked.stderr, /deploy prod blocked: no succeeded staging deploy/);
-    assert.match(blocked.stderr, /deadbee/);
+    assert.match(`${blocked.stdout}\n${blocked.stderr}`, /deploy prod blocked: no succeeded staging deploy/);
+    assert.match(`${blocked.stdout}\n${blocked.stderr}`, /deadbee/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
@@ -7738,7 +7959,7 @@ test('pr recovery surfaces dirty attached workspace state in both recovery optio
   }
 });
 
-test('api action pr recovery stale fingerprint detects sampled large untracked file changes', () => {
+test('api action pr recovery blocks oversized dirty current checkouts', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   const externalParent = mkdtempSync(path.join(os.tmpdir(), 'pipelane-external-'));
   const externalWorktree = path.join(externalParent, 'canvas-palette-options-4f2a');
@@ -7762,31 +7983,8 @@ test('api action pr recovery stale fingerprint detects sampled large untracked f
     const firstEnvelope = JSON.parse(first.stdout);
     const choiceInput = firstEnvelope.data.preflight.inputs.find((input) => input.name === 'recover');
     const option = choiceInput.options.find((entry) => entry.value === 'use-current-checkout');
-
-    const second = JSON.parse(runCli([
-      'run', 'api', 'action', 'pr',
-      '--task', 'Canvas Palette Options',
-      '--recover', 'use-current-checkout',
-      '--binding-fingerprint', option.params.bindingFingerprint,
-      '--title', 'Canvas Palette Options',
-      '--json',
-    ], externalWorktree).stdout);
-    const token = second.data.preflight.confirmation.token;
-
-    writeFileSync(path.join(externalWorktree, 'large.bin'), `${'b'.repeat(2 * 1024 * 1024)}\n`, 'utf8');
-    const executed = runCli([
-      'run', 'api', 'action', 'pr',
-      '--task', 'Canvas Palette Options',
-      '--recover', 'use-current-checkout',
-      '--binding-fingerprint', option.params.bindingFingerprint,
-      '--title', 'Canvas Palette Options',
-      '--execute',
-      '--confirm-token', token,
-      '--json',
-    ], externalWorktree, {}, true);
-    const executedEnvelope = JSON.parse(executed.stdout);
-    assert.equal(executed.status, 1);
-    assert.match(executedEnvelope.message, /stale|preflight/i);
+    assert.equal(option, undefined, 'oversized dirty checkout must not offer a rebind-and-run option');
+    assert.match(firstEnvelope.message, /too large or opaque|size budget/i);
 
     const lock = JSON.parse(readFileSync(path.join(resolveCommonDir(repoRoot), 'pipelane-state', 'task-locks', `${created.taskSlug}.json`), 'utf8'));
     assert.equal(lock.worktreePath, created.worktreePath, 'large-file stale recovery must not mutate the lock');
@@ -7802,7 +8000,7 @@ test('api action pr recovery stale fingerprint detects sampled large untracked f
   }
 });
 
-test('api action pr recovery fingerprint tracks metadata beyond content sampling cap', () => {
+test('api action pr recovery blocks dirty path sets beyond approval budget', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   const externalParent = mkdtempSync(path.join(os.tmpdir(), 'pipelane-external-'));
   const externalWorktree = path.join(externalParent, 'canvas-palette-options-4f2a');
@@ -7828,32 +8026,8 @@ test('api action pr recovery fingerprint tracks metadata beyond content sampling
     const firstEnvelope = JSON.parse(first.stdout);
     const choiceInput = firstEnvelope.data.preflight.inputs.find((input) => input.name === 'recover');
     const option = choiceInput.options.find((entry) => entry.value === 'use-current-checkout');
-    assert.ok(option.params.bindingFingerprint);
-
-    const second = JSON.parse(runCli([
-      'run', 'api', 'action', 'pr',
-      '--task', 'Canvas Palette Options',
-      '--recover', 'use-current-checkout',
-      '--binding-fingerprint', option.params.bindingFingerprint,
-      '--title', 'Canvas Palette Options',
-      '--json',
-    ], externalWorktree).stdout);
-    const token = second.data.preflight.confirmation.token;
-
-    writeFileSync(path.join(externalWorktree, 'bulk-512.txt'), 'changed beyond the content sampling cutoff\n', 'utf8');
-    const executed = runCli([
-      'run', 'api', 'action', 'pr',
-      '--task', 'Canvas Palette Options',
-      '--recover', 'use-current-checkout',
-      '--binding-fingerprint', option.params.bindingFingerprint,
-      '--title', 'Canvas Palette Options',
-      '--execute',
-      '--confirm-token', token,
-      '--json',
-    ], externalWorktree, {}, true);
-    const executedEnvelope = JSON.parse(executed.stdout);
-    assert.equal(executed.status, 1);
-    assert.match(executedEnvelope.message, /stale|preflight/i);
+    assert.equal(option, undefined, 'truncated dirty checkout must not offer a rebind-and-run option');
+    assert.match(firstEnvelope.message, /too large or opaque|approval budget/i);
 
     const lock = JSON.parse(readFileSync(path.join(resolveCommonDir(repoRoot), 'pipelane-state', 'task-locks', `${created.taskSlug}.json`), 'utf8'));
     assert.equal(lock.worktreePath, created.worktreePath, 'overflow-path stale recovery must not mutate the lock');
@@ -10502,6 +10676,7 @@ test('api snapshot keys staging smoke health to the current promotion SHA, not j
     runCli(['run', 'smoke', 'staging'], repoRoot);
     writeTaskLock(repoRoot, 'bootstrap', { mode: 'release', surfaces: ['frontend'] });
     writePrRecord(repoRoot, 'bootstrap', targetSha);
+    await writeSucceededDeployRecord(repoRoot, 'staging', targetSha, ['frontend']);
     runCli(['run', 'devmode', 'release', '--surfaces', 'frontend', '--override', '--reason', 'target smoke fixture'], repoRoot);
 
     const envelope = JSON.parse((await runCliAsync(['run', 'api', 'snapshot'], repoRoot)).stdout);
@@ -15091,7 +15266,7 @@ test('smoke setup rejects --yes flag (cut from v1)', () => {
   try {
     const result = runCli(['run', 'smoke', 'setup', '--yes'], repoRoot, {}, true);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Unknown flag/);
+    assert.match(result.stderr, /Unknown flag|does not accept flag/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }
@@ -16065,6 +16240,28 @@ test('migrateLegacyStateDir copies orphaned state forward when canonical dir is 
   }
 });
 
+test('ensureStateDir migrates legacy task locks before creating canonical task-locks', async () => {
+  const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const { tmpRoot, commonDir } = makeStateScratch();
+  try {
+    const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
+    const legacyDir = path.join(commonDir, 'rocketboard-workflow');
+    mkdirSync(path.join(legacyDir, 'task-locks'), { recursive: true });
+    writeFileSync(
+      path.join(legacyDir, 'task-locks', 'demo-1.json'),
+      JSON.stringify({ taskSlug: 'demo-1', branchName: 'codex/demo-1', worktreePath: '/tmp/demo-1', mode: 'build', surfaces: ['frontend'], updatedAt: '2026-04-24T00:00:00Z' }, null, 2),
+      'utf8',
+    );
+
+    const canonicalDir = stateMod.ensureStateDir(commonDir, config);
+
+    assert.equal(existsSync(path.join(canonicalDir, 'task-locks', 'demo-1.json')), true);
+    assert.equal(stateMod.loadTaskLock(commonDir, config, 'demo-1')?.worktreePath, '/tmp/demo-1');
+  } finally {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
 test('migrateLegacyStateDir is idempotent: second call is a no-op', async () => {
   const stateMod = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
   const { tmpRoot, commonDir } = makeStateScratch();
@@ -16163,9 +16360,16 @@ test('loadModeState warns loudly when expected state is missing but install mark
   const { tmpRoot, commonDir } = makeStateScratch();
   try {
     const config = stateMod.defaultWorkflowConfig('demo', 'Demo');
-    // Plant a marker (proxy for "pipelane has been here") but no
-    // mode-state file — the regression scenario the warn is for.
+    // Write mode-state once, then remove it. The install marker tracks
+    // concrete state files that have existed, so fresh optional defaults
+    // stay quiet while genuine state loss warns.
     stateMod.ensureStateDir(commonDir, config);
+    stateMod.saveModeState(commonDir, config, {
+      mode: 'release',
+      requestedSurfaces: ['frontend'],
+      override: null,
+      updatedAt: '2026-04-27T00:00:00Z',
+    });
     rmSync(stateMod.modeStatePath(commonDir, config), { force: true });
     assert.equal(stateMod.hasInstallMarker(commonDir, config), true);
 
@@ -16259,5 +16463,242 @@ test('saveModeState + loadModeState round-trip is stable across the schemaVersio
     assert.deepEqual(loaded.lastOverride, original.lastOverride);
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
+
+test('worktree status digest fails closed for opaque dirty state', async () => {
+  const repoRoot = createRepo();
+  try {
+    const { readWorktreeStatusSnapshot } = await import(path.join(KIT_ROOT, 'src', 'operator', 'worktree-status.ts'));
+    mkdirSync(path.join(repoRoot, 'generated'), { recursive: true });
+    writeFileSync(path.join(repoRoot, 'generated', 'artifact.txt'), 'opaque generated output\n', 'utf8');
+
+    const opaque = readWorktreeStatusSnapshot(repoRoot, { includeStatusDigest: true });
+    assert.equal(opaque.dirty, true);
+    assert.equal(opaque.statusDigestReliable, false);
+    assert.match(opaque.statusDigestWarnings.join('\n'), /untracked directories are opaque/);
+
+    writeFileSync(path.join(repoRoot, 'large-untracked.bin'), Buffer.alloc(1024 * 1024 + 1, 7));
+    const oversized = readWorktreeStatusSnapshot(repoRoot, { includeStatusDigest: true });
+    assert.equal(oversized.statusDigestReliable, false);
+    assert.match(oversized.statusDigestWarnings.join('\n'), /dirty file exceeds route approval size budget/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('destination routes block opaque dirty approvals before local PR side effects', () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    execFileSync('git', ['add', '.'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['commit', '-m', 'configure pipelane'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    writeTaskLock(repoRoot, 'opaque-route', { mode: 'build', surfaces: ['frontend'] });
+    mkdirSync(path.join(repoRoot, 'generated'), { recursive: true });
+    writeFileSync(path.join(repoRoot, 'generated', 'artifact.txt'), 'opaque generated output\n', 'utf8');
+
+    const result = runCli(
+      ['run', 'deploy', 'staging', '--task', 'opaque-route', '--yes', '--json'],
+      repoRoot,
+      {},
+      true,
+    );
+    const payload = JSON.parse(result.stdout);
+
+    assert.equal(result.status, 1);
+    assert.match(payload.blockers.join('\n'), /worktree dirty state is too large or opaque/);
+    assert.match(payload.blockers.join('\n'), /untracked directories are opaque/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('destination planner treats newer requested deploys as pending before older successes', async () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    execFileSync('git', ['add', '.'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    execFileSync('git', ['commit', '-m', 'configure pipelane'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    const sha = run('git', ['rev-parse', 'HEAD'], repoRoot);
+    writeTaskLock(repoRoot, 'pending-route', { mode: 'build', surfaces: ['frontend'] });
+    writePrRecord(repoRoot, 'pending-route', sha);
+    await writeSucceededDeployRecord(repoRoot, 'staging', sha, ['frontend'], { taskSlug: 'pending-route' });
+    appendDeployRecord(repoRoot, {
+      environment: 'staging',
+      sha,
+      surfaces: ['frontend'],
+      workflowName: 'Deploy Hosted',
+      requestedAt: new Date().toISOString(),
+      taskSlug: 'pending-route',
+      status: 'requested',
+      idempotencyKey: 'newer-request',
+      triggeredBy: 'test',
+    });
+
+    const result = runCli(
+      ['run', 'deploy', 'staging', '--task', 'pending-route', '--plan', '--json'],
+      repoRoot,
+      {},
+      true,
+    );
+    const payload = JSON.parse(result.stdout);
+
+    assert.deepEqual(payload.remainingSteps.map((step) => step.id), ['deploy_staging']);
+    assert.match(payload.blockers.join('\n'), /staging deploy is already in flight/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('api snapshot requires staging smoke to match current task surfaces and deploy identity', async () => {
+  const {
+    loadSmokeRegistry,
+    resolveWorkflowContext,
+    saveSmokeRunRecord,
+  } = await import(path.join(KIT_ROOT, 'src', 'operator', 'state.ts'));
+  const {
+    computeSmokeRequirementsFingerprint,
+    updateSmokeLatest,
+  } = await import(path.join(KIT_ROOT, 'src', 'operator', 'smoke-gate.ts'));
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    writeFullDeployConfigClaude(repoRoot);
+    mkdirSync(path.join(repoRoot, 'e2e'), { recursive: true });
+    writeFileSync(path.join(repoRoot, 'e2e', 'auth.spec.ts'), "test('@smoke-auth sign in', async () => {});\n", 'utf8');
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.smoke = {
+        requireStagingSmoke: true,
+        staging: { command: smokeResultCommand([{ tag: '@smoke-auth', status: 'passed' }]) },
+      };
+    });
+    runCli(['run', 'smoke', 'plan'], repoRoot);
+    updateSmokeRegistry(repoRoot, (registry) => {
+      registry.checks['@smoke-auth'].blocking = true;
+      registry.checks['@smoke-auth'].quarantine = false;
+    });
+    runCli(['run', 'devmode', 'release', '--surfaces', 'frontend', '--override', '--reason', 'surface-bound smoke fixture'], repoRoot);
+    const sha = '3333333333333333333333333333333333333333';
+    writeTaskLock(repoRoot, 'bootstrap', { mode: 'release', surfaces: ['frontend'] });
+    writePrRecord(repoRoot, 'bootstrap', sha);
+    await writeSucceededDeployRecord(repoRoot, 'staging', sha, ['frontend'], { taskSlug: 'bootstrap' });
+
+    const context = resolveWorkflowContext(repoRoot);
+    const smokeFingerprint = computeSmokeRequirementsFingerprint(loadSmokeRegistry(repoRoot, context.config), 'staging', context.config);
+    const wrongSurfaceSmoke = {
+      runId: 'wrong-surface-smoke',
+      environment: 'staging',
+      sha,
+      baseUrl: 'https://staging.example.test',
+      taskSlug: 'bootstrap',
+      surfaces: ['edge'],
+      deployIdempotencyKey: `staging-${sha.slice(0, 8)}`,
+      smokeRequirementsFingerprint: smokeFingerprint,
+      status: 'passed',
+      startedAt: '2026-04-22T00:00:00Z',
+      finishedAt: '2026-04-22T00:01:00Z',
+      preflight: [],
+      cohortResults: [],
+      checks: [],
+      waiversApplied: [],
+      lastKnownGoodSha: null,
+      drifted: false,
+      retryCount: 0,
+    };
+    saveSmokeRunRecord(context.commonDir, context.config, wrongSurfaceSmoke);
+    updateSmokeLatest({ commonDir: context.commonDir, config: context.config, record: wrongSurfaceSmoke });
+
+    const envelope = JSON.parse(runCli(['run', 'api', 'snapshot'], repoRoot).stdout);
+    const smokeSource = envelope.data.sourceHealth.find((entry) => entry.name === 'smoke.staging');
+    const smokeIssue = envelope.data.attention.find((issue) => issue.code === 'smoke.staging.target_missing');
+
+    assert.equal(smokeSource.state, 'blocked');
+    assert.equal(smokeSource.blocking, true);
+    assert.match(smokeSource.reason, /no qualifying staging smoke/i);
+    assert.equal(smokeIssue.blocking, true);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('api route actions reject conflicting task, pr, and sha identities', () => {
+  const repoRoot = createRepo();
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+
+    const mixedTaskPr = runCli(
+      ['run', 'api', 'action', 'route.deploy.prod', '--task', 'Mixed Identity', '--pr', '1'],
+      repoRoot,
+      {},
+      true,
+    );
+    assert.notEqual(mixedTaskPr.status, 0);
+    assert.match(mixedTaskPr.stderr, /route\.deploy\.prod cannot combine --task and --pr/);
+
+    const mixedPrSha = runCli(
+      ['run', 'api', 'action', 'route.deploy.staging', '--pr', '1', '--sha', 'HEAD'],
+      repoRoot,
+      {},
+      true,
+    );
+    assert.notEqual(mixedPrSha.status, 0);
+    assert.match(mixedPrSha.stderr, /route\.deploy\.staging cannot combine --pr and --sha/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('api route actions forward approved PR title and message into the PR child', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const fakeBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
+  const ghStateFile = path.join(fakeBin, 'gh-state.json');
+  writeFakeGh(fakeBin, ghStateFile);
+  const env = { PATH: `${fakeBin}:${process.env.PATH}`, GH_STATE_FILE: ghStateFile };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.buildMode = { ...config.buildMode, autoDeployOnMerge: false };
+    });
+    commitAll(repoRoot, 'Adopt pipelane');
+    const created = JSON.parse(runCli(['run', 'new', '--task', 'Route Metadata', '--json'], repoRoot).stdout);
+    writeFileSync(path.join(created.worktreePath, 'feature.txt'), 'route metadata\n', 'utf8');
+
+    const routeArgs = [
+      'run', 'api', 'action', 'route.merge',
+      '--task', 'Route Metadata',
+      '--title', 'Approved PR Title',
+      '--message', 'approved commit message',
+    ];
+    const preflight = JSON.parse(runCli(routeArgs, created.worktreePath, env).stdout);
+    const token = preflight.data.preflight.confirmation.token;
+    assert.ok(token);
+
+    const executed = runCli(
+      [...routeArgs, '--execute', '--confirm-token', token],
+      created.worktreePath,
+      env,
+    );
+    const envelope = JSON.parse(executed.stdout);
+
+    assert.equal(envelope.ok, true, envelope.message);
+    const ghState = JSON.parse(readFileSync(ghStateFile, 'utf8'));
+    const pr = Object.values(ghState.prs).find((entry) => entry.title === 'Approved PR Title');
+    assert.ok(pr, 'route-created PR should use the API-approved title');
+    const commitSubject = execFileSync('git', ['log', '-1', '--pretty=%s'], {
+      cwd: created.worktreePath,
+      encoding: 'utf8',
+    }).trim();
+    assert.equal(commitSubject, 'approved commit message');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(fakeBin, { recursive: true, force: true });
   }
 });

@@ -1,7 +1,16 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { loadDeployConfig } from './release-gate.ts';
+import {
+  computeDeployConfigFingerprint,
+  describeRequestedDeployRecord,
+  disqualifyDeployRecord,
+  emptyDeployConfig,
+  loadDeployConfig,
+  resolveDeployStateKey,
+  verifyDeployRecord,
+} from './release-gate.ts';
 import { buildSmokeFailureFixPrompt } from './smoke-hot-paths.ts';
 import {
   loadDeployState,
@@ -35,6 +44,7 @@ import {
   type SmokeWaiverRecord,
   type WorkflowConfig,
 } from './state.ts';
+import { canonicalize, signSignedPayload, verifySignedPayload } from './integrity.ts';
 
 export interface ResolvedSmokeEnvironmentConfig {
   command: string;
@@ -102,6 +112,8 @@ export interface ResolvedSmokeTarget {
   sha: string;
   baseUrl: string;
   deployRecord: DeployRecord;
+  surfaces: string[];
+  taskSlug?: string;
 }
 
 export function resolveSmokeConfig(config: WorkflowConfig): ResolvedSmokeConfig {
@@ -483,23 +495,74 @@ export function evaluateSmokeCoverage(options: {
   };
 }
 
+export function computeSmokeRequirementsFingerprint(
+  registry: SmokeRegistryState,
+  environment: SmokeEnvironment,
+  config: WorkflowConfig,
+): string {
+  const smokeConfig = resolveSmokeConfig(config);
+  const scoped = {
+    environment,
+    requireStagingSmoke: smokeConfig.requireStagingSmoke,
+    criticalPathCoverage: smokeConfig.criticalPathCoverage,
+    criticalPaths: [...smokeConfig.criticalPaths].sort(),
+    checks: registry.checks,
+  };
+  return createHash('sha256').update(canonicalize(scoped)).digest('hex');
+}
+
+export function signSmokeRunRecord(record: SmokeRunRecord, key: string): string {
+  return signSignedPayload(record, key);
+}
+
+export function verifySmokeRunRecord(record: SmokeRunRecord, key: string): boolean {
+  return verifySignedPayload(record, key);
+}
+
 export function resolveSmokeTarget(options: {
   repoRoot: string;
   commonDir: string;
   config: WorkflowConfig;
   environment: SmokeEnvironment;
+  taskSlug?: string;
+  surfaces?: string[];
+  sha?: string;
 }): ResolvedSmokeTarget {
-  const deployConfig = loadDeployConfig(options.repoRoot);
+  const deployConfig = loadDeployConfig(options.repoRoot) ?? emptyDeployConfig();
   const deployState = loadDeployState(options.commonDir, options.config).records;
+  const stateKey = resolveDeployStateKey();
+  const expectedFingerprint = computeDeployConfigFingerprint(deployConfig, options.environment);
+  const requestedSurfaces = normalizeSurfaceSet(options.surfaces ?? []);
   const deployRecord = [...deployState]
     .reverse()
-    .find((record) => record.environment === options.environment && record.status === 'succeeded' && Boolean(record.verifiedAt));
+    .find((record) => {
+      if (record.environment !== options.environment) return false;
+      if (options.sha && record.sha !== options.sha) return false;
+      if (options.taskSlug && record.taskSlug !== options.taskSlug) return false;
+      if (requestedSurfaces.length > 0 && surfaceSetKey(record.surfaces ?? []) !== surfaceSetKey(requestedSurfaces)) return false;
+      if (stateKey && !verifyDeployRecord(record, stateKey)) return false;
+      return true;
+    });
   if (!deployRecord) {
-    throw new Error(`smoke ${options.environment} blocked: no verified deploy record found for ${options.environment}.`);
+    throw new Error(`smoke ${options.environment} blocked: no verified deploy record found for ${options.environment} matching the requested task, SHA, and surfaces.`);
+  }
+  const qualificationSurfaces = requestedSurfaces.length > 0 ? requestedSurfaces : normalizeSurfaceSet(deployRecord.surfaces ?? []);
+  if (qualificationSurfaces.length === 0) {
+    throw new Error(`smoke ${options.environment} blocked: latest deploy record does not declare deploy surfaces.`);
+  }
+  const disqualified = disqualifyDeployRecord({
+    record: deployRecord,
+    surfaces: qualificationSurfaces,
+    expectedFingerprint,
+    stateKey,
+  });
+  if (disqualified) {
+    const requested = describeRequestedDeployRecord(deployRecord);
+    throw new Error(`smoke ${options.environment} blocked: ${requested?.reason ?? `latest deploy record is not verified for smoke (${disqualified})`}`);
   }
   const frontend = options.environment === 'staging'
-    ? deployConfig?.frontend.staging
-    : deployConfig?.frontend.production;
+    ? deployConfig.frontend.staging
+    : deployConfig.frontend.production;
   const baseUrl = frontend?.url?.trim() || frontend?.healthcheckUrl?.trim() || '';
   if (!baseUrl) {
     throw new Error(`smoke ${options.environment} blocked: missing frontend ${options.environment} URL in deploy configuration.`);
@@ -509,7 +572,17 @@ export function resolveSmokeTarget(options: {
     sha: deployRecord.sha,
     baseUrl,
     deployRecord,
+    surfaces: normalizeSurfaceSet(deployRecord.surfaces ?? []),
+    taskSlug: deployRecord.taskSlug,
   };
+}
+
+function normalizeSurfaceSet(surfaces: string[]): string[] {
+  return [...new Set(surfaces.map((surface) => surface.trim()).filter(Boolean))].sort();
+}
+
+function surfaceSetKey(surfaces: string[]): string {
+  return normalizeSurfaceSet(surfaces).join(',');
 }
 
 export function acquireSmokeEnvironmentLock(options: {
@@ -652,9 +725,13 @@ export function pruneSmokeHistory(commonDir: string, config: WorkflowConfig): vo
 
 export function findQualifyingSmokeRun(options: {
   commonDir: string;
+  repoRoot?: string;
   config: WorkflowConfig;
   environment: SmokeEnvironment;
   sha: string;
+  taskSlug?: string;
+  surfaces?: string[];
+  deployIdempotencyKey?: string;
 }): SmokeRunRecord | null {
   const latest = findLatestSmokeRun(options);
   if (!latest) {
@@ -665,15 +742,29 @@ export function findQualifyingSmokeRun(options: {
 
 export function findLatestSmokeRun(options: {
   commonDir: string;
+  repoRoot?: string;
   config: WorkflowConfig;
   environment: SmokeEnvironment;
   sha: string;
+  taskSlug?: string;
+  surfaces?: string[];
+  deployIdempotencyKey?: string;
 }): SmokeRunRecord | null {
+  const requestedSurfaces = normalizeSurfaceSet(options.surfaces ?? []);
+  const stateKey = resolveDeployStateKey();
+  const expectedSmokeFingerprint = options.repoRoot
+    ? computeSmokeRequirementsFingerprint(loadSmokeRegistry(options.repoRoot, options.config), options.environment, options.config)
+    : '';
   return [...listSmokeRunRecords(options.commonDir, options.config)]
     .reverse()
     .find((record) =>
       record.environment === options.environment
-      && record.sha === options.sha,
+      && record.sha === options.sha
+      && (!options.taskSlug || record.taskSlug === options.taskSlug)
+      && (!options.deployIdempotencyKey || record.deployIdempotencyKey === options.deployIdempotencyKey)
+      && (requestedSurfaces.length === 0 || surfaceSetKey(record.surfaces ?? []) === surfaceSetKey(requestedSurfaces))
+      && (!stateKey || verifySmokeRunRecord(record, stateKey))
+      && (!expectedSmokeFingerprint || record.smokeRequirementsFingerprint === expectedSmokeFingerprint),
     ) ?? null;
 }
 

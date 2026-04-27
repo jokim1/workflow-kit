@@ -447,6 +447,12 @@ export interface SmokeRunRecord {
   environment: SmokeEnvironment;
   sha: string;
   baseUrl: string;
+  taskSlug?: string;
+  surfaces?: string[];
+  deployIdempotencyKey?: string;
+  deployWorkflowRunId?: string;
+  deployConfigFingerprint?: string;
+  smokeRequirementsFingerprint?: string;
   status: SmokeRunStatus;
   startedAt: string;
   finishedAt: string;
@@ -457,6 +463,7 @@ export interface SmokeRunRecord {
   lastKnownGoodSha: string | null;
   drifted?: boolean;
   retryCount?: number;
+  signature?: string;
 }
 
 export interface SmokeLatestState {
@@ -484,6 +491,8 @@ export interface OperatorFlags {
   json: boolean;
   offline: boolean;
   override: boolean;
+  plan: boolean;
+  yes: boolean;
   skipSmokeCoverage: boolean;
   patch: boolean;
   reason: string;
@@ -1208,12 +1217,12 @@ export function resolveSharedRepoRoot(commonDir: string): string {
 
 export function ensureStateDir(commonDir: string, config: WorkflowConfig): string {
   const stateDir = resolveStateDir(commonDir, config);
-  mkdirSync(path.join(stateDir, TASK_LOCKS_DIRNAME), { recursive: true });
   // Idempotent legacy migration runs before marker is planted so a
-  // successful copy doesn't get suppressed by the marker we'd
-  // otherwise plant first. Both calls are no-ops on subsequent
-  // invocations.
+  // successful copy doesn't get suppressed by the marker or an empty
+  // canonical task-locks directory we'd otherwise create first. Both
+  // calls are no-ops on subsequent invocations.
   migrateLegacyStateDir(commonDir, config);
+  mkdirSync(path.join(stateDir, TASK_LOCKS_DIRNAME), { recursive: true });
   ensureInstallMarker(commonDir, config);
   return stateDir;
 }
@@ -1538,10 +1547,71 @@ export function ensureInstallMarker(commonDir: string, config: WorkflowConfig): 
   const target = installMarkerPath(commonDir, config);
   if (existsSync(target)) return;
   mkdirSync(path.dirname(target), { recursive: true });
-  writeJsonFile(target, { installedAt: nowIso() });
+  writeJsonFile(target, { installedAt: nowIso(), stateFiles: [] });
 }
 
 const missingStateWarnings = new Set<string>();
+
+function stateFileMarkerKey(commonDir: string, config: WorkflowConfig, targetPath: string): string {
+  return normalizePath(path.relative(resolveStateDir(commonDir, config), targetPath)).replaceAll('\\', '/');
+}
+
+function readInstallMarker(commonDir: string, config: WorkflowConfig): Record<string, unknown> | null {
+  const target = installMarkerPath(commonDir, config);
+  if (!existsSync(target)) return null;
+  const marker = readJsonFile<unknown>(target, null);
+  return marker && typeof marker === 'object' && !Array.isArray(marker)
+    ? marker as Record<string, unknown>
+    : null;
+}
+
+function markStateFilesWritten(commonDir: string, config: WorkflowConfig, entries: string[]): void {
+  ensureInstallMarker(commonDir, config);
+  const target = installMarkerPath(commonDir, config);
+  const marker = readInstallMarker(commonDir, config) ?? { installedAt: nowIso() };
+  const existing = Array.isArray(marker.stateFiles)
+    ? marker.stateFiles.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  const stateFiles = [...new Set([...existing, ...entries.map((entry) => entry.replaceAll('\\', '/'))])].sort();
+  writeJsonFile(target, { ...marker, stateFiles });
+}
+
+function nearestMarkedStateRoot(targetPath: string): string {
+  let current = path.dirname(targetPath);
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (existsSync(path.join(current, INSTALL_MARKER_FILENAME))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return '';
+}
+
+function markStateFileWritten(targetPath: string): void {
+  const root = nearestMarkedStateRoot(targetPath);
+  if (!root) return;
+  const markerPath = path.join(root, INSTALL_MARKER_FILENAME);
+  const marker = readJsonFile<unknown>(markerPath, null);
+  const markerObject = marker && typeof marker === 'object' && !Array.isArray(marker)
+    ? marker as Record<string, unknown>
+    : { installedAt: nowIso() };
+  const existing = Array.isArray(markerObject.stateFiles)
+    ? markerObject.stateFiles.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  const key = normalizePath(path.relative(root, targetPath)).replaceAll('\\', '/');
+  if (key.startsWith(`${TASK_LOCKS_DIRNAME}/`)) return;
+  const stateFiles = [...new Set([...existing, key])].sort();
+  writeJsonFile(markerPath, { ...markerObject, stateFiles });
+}
+
+function shouldWarnMissingState(commonDir: string, config: WorkflowConfig, targetPath: string): boolean {
+  const marker = readInstallMarker(commonDir, config);
+  if (!marker) return false;
+  const expected = Array.isArray(marker.stateFiles)
+    ? marker.stateFiles.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  return expected.includes(stateFileMarkerKey(commonDir, config, targetPath));
+}
 
 function warnMissingStateAfterInstall(targetPath: string): void {
   if (missingStateWarnings.has(targetPath)) return;
@@ -1611,6 +1681,7 @@ export function migrateLegacyStateDir(commonDir: string, config: WorkflowConfig)
     // populated and the loud-warn path is armed for any genuinely
     // missing files post-migration.
     ensureInstallMarker(commonDir, config);
+    markStateFilesWritten(commonDir, config, copied);
 
     // De-dup so concurrent commands in the same process (the
     // dashboard server hitting multiple loaders) don't each emit
@@ -1647,7 +1718,7 @@ export function readVersionedJsonFile<T>(
   fallback: T,
 ): T {
   if (!existsSync(targetPath)) {
-    if (hasInstallMarker(commonDir, config)) {
+    if (kind !== 'taskLock' && shouldWarnMissingState(commonDir, config, targetPath)) {
       warnMissingStateAfterInstall(targetPath);
     }
     return fallback;
@@ -1686,6 +1757,7 @@ export function writeVersionedJsonFile(kind: StateKind, targetPath: string, valu
   } else {
     writeJsonFile(targetPath, value);
   }
+  markStateFileWritten(targetPath);
 }
 
 export function loadModeState(commonDir: string, config: WorkflowConfig): ModeState {
@@ -1732,12 +1804,46 @@ export function saveModeState(commonDir: string, config: WorkflowConfig, value: 
 }
 
 export function loadDeployState(commonDir: string, config: WorkflowConfig): { records: DeployRecord[] } {
-  const loaded = readVersionedJsonFile<unknown>('deployState', commonDir, config, deployStatePath(commonDir, config), { records: [] as DeployRecord[] });
+  const loaded = readVersionedJsonFile<unknown>('deployState', commonDir, config, deployStatePath(commonDir, config), { records: [] });
   if (!loaded || typeof loaded !== 'object' || Array.isArray(loaded)) {
     return { records: [] };
   }
   const records = (loaded as { records?: unknown }).records;
-  return { records: Array.isArray(records) ? records as DeployRecord[] : [] };
+  return {
+    records: Array.isArray(records)
+      ? records.map(normalizeDeployRecord).filter((record): record is DeployRecord => record !== null)
+      : [],
+  };
+}
+
+function normalizeDeployRecord(value: unknown): DeployRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const environment = raw.environment;
+  if (environment !== 'staging' && environment !== 'prod') return null;
+  if (typeof raw.sha !== 'string' || raw.sha.trim().length === 0) return null;
+  if (!Array.isArray(raw.surfaces)) return null;
+  const surfaces = raw.surfaces
+    .filter((surface): surface is string => typeof surface === 'string' && surface.trim().length > 0)
+    .map((surface) => surface.trim());
+  if (surfaces.length === 0) return null;
+
+  const record = {
+    ...raw,
+    environment,
+    sha: raw.sha,
+    surfaces,
+    workflowName: typeof raw.workflowName === 'string' ? raw.workflowName : '',
+    requestedAt: raw.requestedAt as DeployRecord['requestedAt'],
+  } as DeployRecord;
+  if (raw.status !== undefined && !isDeployStatus(raw.status)) {
+    delete (record as { status?: unknown }).status;
+  }
+  return record;
+}
+
+function isDeployStatus(value: unknown): value is DeployStatus {
+  return value === 'requested' || value === 'succeeded' || value === 'failed' || value === 'unknown';
 }
 
 export function saveDeployState(commonDir: string, config: WorkflowConfig, value: { records: DeployRecord[] }): void {
@@ -1979,6 +2085,8 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
     json: false,
     offline: false,
     override: false,
+    plan: false,
+    yes: false,
     skipSmokeCoverage: false,
     patch: false,
     reason: '',
@@ -2097,6 +2205,18 @@ export function parseOperatorArgs(argv: string[]): ParsedOperatorArgs {
     if (flagName === '--override') {
       rejectInlineValue('--override');
       flags.override = true;
+      continue;
+    }
+
+    if (flagName === '--plan') {
+      rejectInlineValue('--plan');
+      flags.plan = true;
+      continue;
+    }
+
+    if (flagName === '--yes' || flagName === '-y') {
+      rejectInlineValue(flagName);
+      flags.yes = true;
       continue;
     }
 
@@ -2339,6 +2459,11 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
       throw new Error('--pr requires a safe positive PR number.');
     }
   };
+  const rejectPlanAndYes = (commandLabel: string): void => {
+    if (parsed.flags.plan && parsed.flags.yes) {
+      throw new Error(`${commandLabel} cannot combine --plan and --yes.`);
+    }
+  };
 
   switch (parsed.command) {
     case 'devmode': {
@@ -2372,16 +2497,18 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
       requireNoPositional('pipelane run repo-guard --task <task-name> [--mode build|release] [--surfaces <csv>] [--offline]');
       return;
     case 'pr':
-      assertOnlyFlags(parsed, ['task', 'title', 'message', 'forceInclude', 'recover', 'bindingFingerprint']);
-      requireNoPositional('pipelane run pr [--task <task-name>] [--title <title>] [--message <message>] [--force-include <path>]');
+      assertOnlyFlags(parsed, ['task', 'title', 'message', 'forceInclude', 'recover', 'bindingFingerprint', 'plan', 'yes']);
+      rejectPlanAndYes('pr');
+      requireNoPositional('pipelane run pr [--task <task-name>] [--title <title>] [--message <message>] [--force-include <path>] [--plan|--yes]');
       return;
     case 'merge':
-      assertOnlyFlags(parsed, ['task', 'pr']);
+      assertOnlyFlags(parsed, ['task', 'pr', 'title', 'message', 'forceInclude', 'plan', 'yes']);
       requirePositivePrNumber();
       if (parsed.flags.task.trim() && parsed.flags.pr.trim()) {
         throw new Error('merge cannot combine --task and --pr; choose one PR/task identity.');
       }
-      requireNoPositional('pipelane run merge [--task <task-name> | --pr <number>]');
+      rejectPlanAndYes('merge');
+      requireNoPositional('pipelane run merge [--task <task-name> | --pr <number>] [--title <title>] [--message <message>] [--force-include <path>] [--plan|--yes]');
       return;
     case 'release-check':
       assertOnlyFlags(parsed, ['surfaces']);
@@ -2394,7 +2521,7 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
       }
       return;
     case 'deploy':
-      assertOnlyFlags(parsed, ['task', 'pr', 'sha', 'surfaces', 'async', 'skipSmokeCoverage', 'reason']);
+      assertOnlyFlags(parsed, ['task', 'pr', 'sha', 'surfaces', 'async', 'skipSmokeCoverage', 'reason', 'title', 'message', 'forceInclude', 'plan', 'yes']);
       requirePositivePrNumber();
       if (parsed.positional.length === 0) {
         throw new Error('deploy requires an environment: staging or prod.');
@@ -2414,6 +2541,7 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
       if (parsed.flags.skipSmokeCoverage && parsed.positional[0] === 'staging') {
         throw new Error('--skip-smoke-coverage only applies to production deploys.');
       }
+      rejectPlanAndYes('deploy');
       return;
     case 'smoke': {
       const [subcommand] = parsed.positional;
@@ -2462,14 +2590,20 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
         if (parsed.positional.length > 1) failUnexpected('pipelane run smoke plan [--refresh] [--feedback <text>] [--scenario-file <path>]');
         return;
       }
-      assertOnlyFlags(parsed, ['reason']);
       if (subcommand === 'staging' || subcommand === 'prod') {
+        assertOnlyFlags(parsed, ['task', 'pr', 'sha', 'surfaces', 'reason', 'title', 'message', 'forceInclude', 'plan', 'yes']);
+        requirePositivePrNumber();
+        if (parsed.flags.task.trim() && parsed.flags.pr.trim()) {
+          throw new Error(`smoke ${subcommand} cannot combine --task and --pr; choose one PR/task identity.`);
+        }
         if (parsed.flags.reason) {
           throw new Error(`smoke ${subcommand} does not accept --reason.`);
         }
-        if (parsed.positional.length > 1) failUnexpected('pipelane run smoke <staging|prod>');
+        rejectPlanAndYes(`smoke ${subcommand}`);
+        if (parsed.positional.length > 1) failUnexpected('pipelane run smoke <staging|prod> [--task <task-name> | --pr <number>] [--sha <sha>] [--surfaces <csv>] [--title <title>] [--message <message>] [--force-include <path>] [--plan|--yes]');
         return;
       }
+      assertOnlyFlags(parsed, ['reason']);
       if (subcommand === 'waiver') {
         if (parsed.positional.length !== 4) {
           throw new Error('Usage: pipelane run smoke waiver <create|extend> <@smoke-tag> <staging|prod> --reason <text>');
@@ -2583,15 +2717,30 @@ export function validateOperatorArgs(parsed: ParsedOperatorArgs): void {
         }
         requirePositivePrNumber();
         const actionId = parsed.positional[1] ?? '';
+        const taskPrExclusiveActions = new Set([
+          'merge',
+          'deploy.staging',
+          'deploy.prod',
+          'route.merge',
+          'route.deploy.staging',
+          'route.smoke.staging',
+          'route.deploy.prod',
+        ]);
+        const prShaExclusiveActions = new Set([
+          'deploy.staging',
+          'deploy.prod',
+          'route.deploy.staging',
+          'route.deploy.prod',
+        ]);
         if (
-          (actionId === 'merge' || actionId === 'deploy.staging' || actionId === 'deploy.prod')
+          taskPrExclusiveActions.has(actionId)
           && parsed.flags.task.trim()
           && parsed.flags.pr.trim()
         ) {
           throw new Error(`${actionId} cannot combine --task and --pr; choose one PR/task identity.`);
         }
         if (
-          (actionId === 'deploy.staging' || actionId === 'deploy.prod')
+          prShaExclusiveActions.has(actionId)
           && parsed.flags.pr.trim()
           && parsed.flags.sha.trim()
         ) {
@@ -2615,6 +2764,8 @@ const FLAG_RENDERERS: Array<{ key: OperatorFlagKey; label: string; active: (flag
   { key: 'statusOnly', label: '--status-only', active: (flags) => flags.statusOnly },
   { key: 'offline', label: '--offline', active: (flags) => flags.offline },
   { key: 'override', label: '--override', active: (flags) => flags.override },
+  { key: 'plan', label: '--plan', active: (flags) => flags.plan },
+  { key: 'yes', label: '--yes', active: (flags) => flags.yes },
   { key: 'skipSmokeCoverage', label: '--skip-smoke-coverage', active: (flags) => flags.skipSmokeCoverage },
   { key: 'patch', label: '--patch', active: (flags) => flags.patch },
   { key: 'reason', label: '--reason', active: (flags) => flags.reason.trim().length > 0 },

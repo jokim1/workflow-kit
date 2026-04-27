@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { DeployConfig } from '../release-gate.ts';
 import type { ApiStatusCell, LaneState } from '../api/envelope.ts';
 import type { BranchLanes } from '../api/snapshot.ts';
-import type { WorkflowConfig, WorkflowContext } from '../state.ts';
+import type { WorkflowCommand, WorkflowConfig, WorkflowContext } from '../state.ts';
 import {
   DEFAULT_MODE,
   formatWorkflowCommand,
@@ -161,6 +161,83 @@ function escapeForDenyRegex(pattern: string): string {
 
 export function hasStagedChanges(repoRoot: string): boolean {
   return Boolean(runGit(repoRoot, ['diff', '--cached', '--name-only'], true)?.trim());
+}
+
+interface BaseDriftStatus {
+  baseBranch: string;
+  upstreamRef: string;
+  ahead: number;
+  behind: number;
+  fetchFailed: boolean;
+  fetchError: string;
+}
+
+export function buildStaleBaseBlocker(context: WorkflowContext, command: Extract<WorkflowCommand, 'pr' | 'merge'>): string {
+  return buildStaleBaseBlockerForRepo({
+    repoRoot: context.repoRoot,
+    config: context.config,
+    command,
+  });
+}
+
+export function buildStaleBaseBlockerForRepo(options: {
+  repoRoot: string;
+  config: Pick<WorkflowConfig, 'aliases' | 'baseBranch'>;
+  command: Extract<WorkflowCommand, 'pr' | 'merge'>;
+}): string {
+  const status = inspectBaseDrift(options.repoRoot, options.config.baseBranch);
+  if (!status || status.behind <= 0) return '';
+
+  const commandLabel = formatWorkflowCommand(options.config, options.command);
+  const commitWord = status.behind === 1 ? 'commit' : 'commits';
+  const lines = [
+    `${commandLabel} blocked because this checkout is behind ${status.upstreamRef} by ${status.behind} ${commitWord}.`,
+    'Rebase before creating, updating, or merging the PR so review only includes this task and does not carry upstream reversions.',
+    '',
+    'Run:',
+    `  git fetch origin ${status.baseBranch}`,
+    `  git rebase ${status.upstreamRef}`,
+    '',
+    `Then re-run ${commandLabel}.`,
+  ];
+  if (status.fetchFailed) {
+    lines.splice(1, 0, `Remote refresh failed (${status.fetchError}); checked the existing ${status.upstreamRef} ref.`);
+  }
+  return lines.join('\n');
+}
+
+function inspectBaseDrift(repoRoot: string, rawBaseBranch: string): BaseDriftStatus | null {
+  const baseBranch = rawBaseBranch.trim();
+  if (!baseBranch) return null;
+  const upstreamRef = `origin/${baseBranch}`;
+
+  const fetch = runCommandCapture('git', ['fetch', 'origin', baseBranch, '--no-tags'], {
+    cwd: repoRoot,
+    timeoutMs: 30_000,
+  });
+  const headSha = runCommandCapture('git', ['rev-parse', '--verify', 'HEAD'], { cwd: repoRoot });
+  const upstreamSha = runCommandCapture('git', ['rev-parse', '--verify', upstreamRef], { cwd: repoRoot });
+  if (!headSha.ok || !headSha.stdout || !upstreamSha.ok || !upstreamSha.stdout) {
+    return null;
+  }
+
+  const counts = runCommandCapture('git', ['rev-list', '--left-right', '--count', `HEAD...${upstreamRef}`], {
+    cwd: repoRoot,
+  });
+  if (!counts.ok || !counts.stdout.trim()) return null;
+  const [aheadRaw, behindRaw] = counts.stdout.trim().split(/\s+/);
+  const ahead = Number.parseInt(aheadRaw ?? '', 10);
+  const behind = Number.parseInt(behindRaw ?? '', 10);
+  if (!Number.isFinite(ahead) || !Number.isFinite(behind)) return null;
+
+  return {
+    baseBranch,
+    upstreamRef,
+    ahead,
+    behind,
+    fetchFailed: !fetch.ok,
+    fetchError: fetch.stderr || fetch.stdout || `git fetch origin ${baseBranch} --no-tags exited ${fetch.exitCode}`,
+  };
 }
 
 export function makeIdempotencyKey(options: {

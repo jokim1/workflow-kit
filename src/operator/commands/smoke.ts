@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { loadDeployConfig } from '../release-gate.ts';
+import { loadDeployConfig, resolveDeployStateKey } from '../release-gate.ts';
 import {
   applySmokeHotPathScenarios,
   generateSmokeHotPathTests,
@@ -14,6 +14,7 @@ import {
 import {
   buildLegacySmokeCheckResults,
   buildSmokePlanReport,
+  computeSmokeRequirementsFingerprint,
   computeLastKnownGoodSha,
   discoverCandidateSmokeTests,
   discoverSmokeTags,
@@ -29,6 +30,7 @@ import {
   resolveSmokeConfig,
   resolveSmokeTarget,
   scaffoldSmokeRegistry,
+  signSmokeRunRecord,
   summarizeSmokeRun,
   updateSmokeLatest,
   writeGeneratedSmokeSummary,
@@ -38,6 +40,7 @@ import {
   formatWorkflowCommand,
   loadSmokeRegistry,
   loadSmokeWaivers,
+  loadTaskLock,
   listSmokeRunRecords,
   nowIso,
   patchReadableWorkflowConfig,
@@ -45,6 +48,7 @@ import {
   resolveSmokeLogsDir,
   resolveWorkflowContext,
   runCommandCapture,
+  runGit,
   saveSmokeRegistry,
   saveSmokeRunRecord,
   saveSmokeWaivers,
@@ -61,8 +65,18 @@ import {
   type SmokeWaiverRecord,
 } from '../state.ts';
 import { renderTextEmptyState, type TextEmptyState, type TextEmptyStateOption } from '../text-output.ts';
+import { maybeHandleDestinationCommand } from './destination.ts';
+import {
+  deriveTaskSlugFromPr,
+  inferActiveTaskLock,
+  loadPrByNumber,
+  parsePrNumberFlag,
+  resolveCommandSurfaces,
+} from './helpers.ts';
 
 export async function handleSmoke(cwd: string, parsed: ParsedOperatorArgs): Promise<void> {
+  if (await maybeHandleDestinationCommand(cwd, parsed)) return;
+
   const subcommand = parsed.positional[0] ?? '';
   if (subcommand === '') {
     handleSmokeList(cwd, parsed);
@@ -991,6 +1005,47 @@ function emitSetupOutcome(parsed: ParsedOperatorArgs, outcome: SmokeSetupOutcome
   });
 }
 
+function resolveSmokeTargetConstraints(
+  context: ReturnType<typeof resolveWorkflowContext>,
+  parsed: ParsedOperatorArgs,
+): { taskSlug?: string; surfaces?: string[]; sha?: string } {
+  const explicitPr = parsed.flags.pr.trim();
+  const explicitSha = parsed.flags.sha.trim();
+  let taskSlug = '';
+  let lockSurfaces: string[] = [];
+
+  if (explicitPr) {
+    const pr = loadPrByNumber(context.repoRoot, parsePrNumberFlag(explicitPr));
+    taskSlug = deriveTaskSlugFromPr(context.config, pr, pr.headRefName ?? '');
+    lockSurfaces = loadTaskLock(context.commonDir, context.config, taskSlug)?.surfaces ?? [];
+  } else if (parsed.flags.task.trim()) {
+    const inferred = inferActiveTaskLock(context, parsed.flags.task);
+    taskSlug = inferred.taskSlug;
+    lockSurfaces = inferred.lock.surfaces ?? [];
+  } else {
+    try {
+      const inferred = inferActiveTaskLock(context, '');
+      taskSlug = inferred.taskSlug;
+      lockSurfaces = inferred.lock.surfaces ?? [];
+    } catch {
+      // Dashboard/root smoke commands can still target by explicit --sha or
+      // latest verified deploy when no local task identity is available.
+    }
+  }
+
+  const shouldConstrainSurfaces = parsed.flags.surfaces.length > 0 || Boolean(taskSlug);
+  const resolvedSha = explicitSha
+    ? runGit(context.repoRoot, ['rev-parse', '--verify', explicitSha], true)?.trim() || explicitSha
+    : '';
+  return {
+    ...(taskSlug ? { taskSlug } : {}),
+    ...(resolvedSha ? { sha: resolvedSha } : {}),
+    ...(shouldConstrainSurfaces
+      ? { surfaces: resolveCommandSurfaces(context, parsed.flags.surfaces, lockSurfaces) }
+      : {}),
+  };
+}
+
 async function handleSmokeRun(
   cwd: string,
   parsed: ParsedOperatorArgs,
@@ -1036,12 +1091,14 @@ async function handleSmokeRun(
     environmentChecks,
     waivers,
   });
+  const targetConstraints = resolveSmokeTargetConstraints(context, parsed);
 
   const target = resolveSmokeTarget({
     repoRoot: context.repoRoot,
     commonDir: context.commonDir,
     config: context.config,
     environment,
+    ...targetConstraints,
   });
   const runId = `${target.environment}-${target.sha.slice(0, 7)}-${Date.now()}`;
   acquireSmokeEnvironmentLock({
@@ -1099,8 +1156,10 @@ async function handleSmokeRun(
       commonDir: context.commonDir,
       config: context.config,
       environment,
+      ...targetConstraints,
     });
-    const drifted = refreshedTarget.sha !== target.sha;
+    const drifted = refreshedTarget.sha !== target.sha
+      || refreshedTarget.deployRecord.idempotencyKey !== target.deployRecord.idempotencyKey;
     const records = listSmokeRunRecords(context.commonDir, context.config);
     const lastKnownGoodSha = computeLastKnownGoodSha(records, environment);
     const hasCheckResults = cohortResults.some((cohort) => Array.isArray(cohort.checks) && cohort.checks.length > 0);
@@ -1148,6 +1207,12 @@ async function handleSmokeRun(
       environment,
       sha: target.sha,
       baseUrl: target.baseUrl,
+      taskSlug: target.taskSlug,
+      surfaces: target.surfaces,
+      deployIdempotencyKey: target.deployRecord.idempotencyKey,
+      deployWorkflowRunId: target.deployRecord.workflowRunId,
+      deployConfigFingerprint: target.deployRecord.configFingerprint,
+      smokeRequirementsFingerprint: computeSmokeRequirementsFingerprint(registry, environment, context.config),
       status,
       startedAt,
       finishedAt: nowIso(),
@@ -1159,6 +1224,10 @@ async function handleSmokeRun(
       drifted,
       retryCount: checks.reduce((count, check) => count + Math.max(0, check.attempts.length - 1), 0),
     };
+    const stateKey = resolveDeployStateKey();
+    if (stateKey) {
+      record.signature = signSmokeRunRecord(record, stateKey);
+    }
 
     saveSmokeRunRecord(context.commonDir, context.config, record);
     updateSmokeLatest({

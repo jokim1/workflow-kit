@@ -41,6 +41,43 @@ When the repo is not Pipelane-enabled, `/fix` still fixes the finding, but
 
 **Severity gate:** if the confirmed batch is one finding AND it touches no sensitive area, skip the staleness check — overhead without payoff.
 
+**Base-drift check:** in Pipelane-enabled repos only, before applying fixes,
+refresh the configured base ref and compare the current checkout against it:
+
+- Resolve `<base>` from the Pipelane config first: read `baseBranch` from
+  `.pipelane.json`, then `.project-workflow.json`, then top-level
+  `package.json:pipelane.baseBranch`. If no configured base is available,
+  fall back to `git symbolic-ref refs/remotes/origin/HEAD`, then
+  `main` → `master` → `trunk` → current branch. If a config file is
+  malformed, report one `[warn]` line and use the fallback path.
+- Run `git fetch origin <base> --no-tags` when an `origin` remote exists. If
+  the fetch fails, report the failure and compare against the existing
+  `origin/<base>` ref if available.
+- Run `git rev-list --left-right --count HEAD...origin/<base>`. If the checkout
+  is behind the base by one or more commits, pause before editing and ask with
+  this action-oriented shape:
+
+```
+DRIFT DETECTED
+This checkout is behind origin/<base> by <N> commit(s). Fixing on this base can
+make review keep reporting upstream reversions mixed into the feature diff.
+
+Recommended:
+1. Rebase onto origin/<base>, then fix the findings.
+   Run: git fetch origin <base> && git rebase origin/<base>
+2. Continue without rebasing for now.
+   Use this only if you intentionally need to inspect or patch before rebasing.
+
+Enter 1 or 2:
+```
+
+If the user chooses `1`, run the fetch + rebase when the worktree is clean,
+then continue fixing after the rebase succeeds. If the worktree is dirty or the
+rebase conflicts, stop with the exact next command(s) needed; do not hide the
+conflict. If the user chooses `2`, emit one `[warn]` line that the fix is
+continuing on a stale base and proceed. Do not ask "Continue anyway?" — always
+give the recommended rebase path and a clear alternate choice.
+
 Resolve `REPO_GUIDANCE.md` at the repo root:
 
 - **Missing.** In Pipelane-enabled repos, proceed and queue the missing-file hint; otherwise proceed silently. Do not ask, do not block.

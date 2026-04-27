@@ -374,7 +374,7 @@ export function verifyDeployRecord(record: DeployRecord, key: string): boolean {
   return verifySignedPayload(record, key);
 }
 
-function resolveSurfaceVerification(record: DeployRecord, surface: string): DeployVerificationResult {
+export function resolveSurfaceVerification(record: DeployRecord, surface: string): DeployVerificationResult {
   const perSurface = record.verificationBySurface?.[surface];
   if (perSurface) return { kind: 'per-surface', verification: perSurface };
   // Legacy records (pre-v1.2) only have the aggregate `verification` block,
@@ -388,17 +388,54 @@ function resolveSurfaceVerification(record: DeployRecord, surface: string): Depl
 }
 
 type DeployVerification = NonNullable<DeployRecord['verification']>;
-type DeployVerificationResult =
+export type DeployVerificationResult =
   | { kind: 'per-surface' | 'aggregate'; verification: DeployVerification }
   | { kind: 'missing'; verification: undefined };
 
-function verificationPassed(verification: DeployVerification): boolean {
+export function verificationPassed(verification: DeployVerification): boolean {
   // A DeployVerification with no statusCode is a deploy where no
   // healthcheckUrl was configured. Treat that as unverified (fail closed)
   // under the v1.2 gate even though status==='succeeded' was written.
   const code = verification.statusCode;
   if (typeof code !== 'number') return false;
   return code >= 200 && code < 300;
+}
+
+export function disqualifyDeployRecord(options: {
+  record: DeployRecord;
+  surfaces: string[];
+  expectedFingerprint: string;
+  stateKey: string | undefined;
+}): string | null {
+  const { record, surfaces, expectedFingerprint, stateKey } = options;
+  if (stateKey && !verifyDeployRecord(record, stateKey)) {
+    return 'HMAC signature missing or invalid under PIPELANE_DEPLOY_STATE_KEY';
+  }
+  if (record.status !== 'succeeded') {
+    return `record has status "${record.status ?? 'unknown'}"`;
+  }
+  if (!record.verifiedAt) {
+    return `record lacks verifiedAt timestamp (status "${record.status ?? 'unknown'}" without verified probe)`;
+  }
+  if (!record.configFingerprint) {
+    return 'record lacks configFingerprint (legacy pre-v1.2 record, cannot prove config parity)';
+  }
+  if (record.configFingerprint !== expectedFingerprint) {
+    return 'deploy config has drifted since this record was written; re-run deploy to re-register';
+  }
+  if (!record.idempotencyKey) {
+    return 'record lacks idempotencyKey and cannot be tied to smoke/deploy route identity';
+  }
+  for (const surface of surfaces) {
+    const probe = resolveSurfaceVerification(record, surface);
+    if (probe.kind === 'missing') {
+      return `${surface}: no per-surface verification recorded`;
+    }
+    if (!verificationPassed(probe.verification)) {
+      return `${surface}: healthcheck returned ${probe.verification.statusCode ?? 'no status'}`;
+    }
+  }
+  return null;
 }
 
 export type ObservedStagingResult =
@@ -412,24 +449,34 @@ export interface ReleaseReadinessBlocker {
   message: string;
 }
 
+export interface RequestedDeployRecordState {
+  inFlight: boolean;
+  reason: string;
+}
+
 const RELEASE_GATE_DETAIL_MAX = 300;
-const RELEASE_GATE_INFLIGHT_STAGING_TIMEOUT_MS = 2 * 60 * 60 * 1000;
-const RELEASE_GATE_INFLIGHT_STAGING_TIMEOUT_ENV = 'PIPELANE_RELEASE_GATE_INFLIGHT_TIMEOUT_MS';
+const RELEASE_GATE_INFLIGHT_DEPLOY_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+const RELEASE_GATE_INFLIGHT_DEPLOY_TIMEOUT_ENV = 'PIPELANE_RELEASE_GATE_INFLIGHT_TIMEOUT_MS';
+
+// Tolerate up to 5 minutes of clock skew between the probing machine and
+// the consumer of probe-state or deploy-state. Records more than this in
+// the future are treated as stale (either broken clock or a forged record).
+const FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 function sanitizeReleaseGateDetail(raw: unknown): string {
   if (!raw) return '';
   const text = String(raw);
   // Deploy records are local JSON, not source code. Strip terminal controls
-  // before embedding record details in release-check and /pr errors.
+  // before embedding record details in release-check, /pr, and route errors.
   // eslint-disable-next-line no-control-regex
   return text
     .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x00-\x1F\x7F\x80-\x9F]/g, '')
     .slice(0, RELEASE_GATE_DETAIL_MAX);
 }
 
-function resolveReleaseGateInflightStagingTimeoutMs(): number {
-  const parsed = Number.parseInt(process.env[RELEASE_GATE_INFLIGHT_STAGING_TIMEOUT_ENV] ?? '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : RELEASE_GATE_INFLIGHT_STAGING_TIMEOUT_MS;
+function resolveReleaseGateInflightDeployTimeoutMs(): number {
+  const parsed = Number.parseInt(process.env[RELEASE_GATE_INFLIGHT_DEPLOY_TIMEOUT_ENV] ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : RELEASE_GATE_INFLIGHT_DEPLOY_TIMEOUT_MS;
 }
 
 function formatReleaseGateDuration(ms: number): string {
@@ -438,6 +485,45 @@ function formatReleaseGateDuration(ms: number): string {
     return `${minutes / 60}h`;
   }
   return `${minutes} min`;
+}
+
+export function describeRequestedDeployRecord(
+  record: DeployRecord,
+  nowMs = Date.now(),
+): RequestedDeployRecordState | null {
+  if (record.status !== 'requested') return null;
+  const environmentLabel = record.environment === 'prod' ? 'production' : 'staging';
+  const safeRequestedAt = sanitizeReleaseGateDetail(record.requestedAt);
+  if (!safeRequestedAt) {
+    return { inFlight: false, reason: `latest ${environmentLabel} deploy request has no requestedAt; re-run ${environmentLabel}` };
+  }
+  const requestedMs = typeof record.requestedAt === 'string' ? Date.parse(record.requestedAt) : NaN;
+  if (!Number.isFinite(requestedMs)) {
+    return {
+      inFlight: false,
+      reason: `latest ${environmentLabel} deploy request has invalid requestedAt "${safeRequestedAt}"; re-run ${environmentLabel}`,
+    };
+  }
+  if (requestedMs > nowMs + FUTURE_SKEW_MS) {
+    return {
+      inFlight: false,
+      reason: `latest ${environmentLabel} deploy request has future requestedAt "${safeRequestedAt}"; re-run ${environmentLabel}`,
+    };
+  }
+  const ageMs = Math.max(0, nowMs - requestedMs);
+  const timeoutMs = resolveReleaseGateInflightDeployTimeoutMs();
+  if (ageMs > timeoutMs) {
+    return {
+      inFlight: false,
+      reason: `latest ${environmentLabel} deploy request is stale since ${safeRequestedAt} (${formatReleaseGateDuration(ageMs)} old); re-run ${environmentLabel}`,
+    };
+  }
+  const workflow = record.workflowRunUrl
+    ? ` (${sanitizeReleaseGateDetail(record.workflowRunUrl)})`
+    : record.workflowRunId
+      ? ` (workflow run ${sanitizeReleaseGateDetail(record.workflowRunId)})`
+      : '';
+  return { inFlight: true, reason: `latest ${environmentLabel} deploy is still in flight since ${safeRequestedAt}${workflow}` };
 }
 
 // v1.2: readiness is observed, not asserted. Walks records newest-first and
@@ -469,34 +555,8 @@ export function explainObservedStagingSuccess(
     if (options.key && !verifyDeployRecord(record, options.key)) continue;
 
     if (record.status !== 'succeeded') {
-      if (record.status === 'requested') {
-        const safeRequestedAt = sanitizeReleaseGateDetail(record.requestedAt);
-        if (!safeRequestedAt) {
-          return { ok: false, reason: 'latest staging deploy request has no requestedAt; re-run staging' };
-        }
-        const requestedMs = typeof record.requestedAt === 'string' ? Date.parse(record.requestedAt) : NaN;
-        if (!Number.isFinite(requestedMs)) {
-          return { ok: false, reason: `latest staging deploy request has invalid requestedAt "${safeRequestedAt}"; re-run staging` };
-        }
-        const nowMs = Date.now();
-        if (requestedMs > nowMs + FUTURE_SKEW_MS) {
-          return { ok: false, reason: `latest staging deploy request has future requestedAt "${safeRequestedAt}"; re-run staging` };
-        }
-        const ageMs = Math.max(0, nowMs - requestedMs);
-        const timeoutMs = resolveReleaseGateInflightStagingTimeoutMs();
-        if (ageMs > timeoutMs) {
-          return {
-            ok: false,
-            reason: `latest staging deploy request is stale since ${safeRequestedAt} (${formatReleaseGateDuration(ageMs)} old); re-run staging`,
-          };
-        }
-        const workflow = record.workflowRunUrl
-          ? ` (${sanitizeReleaseGateDetail(record.workflowRunUrl)})`
-          : record.workflowRunId
-            ? ` (workflow run ${sanitizeReleaseGateDetail(record.workflowRunId)})`
-            : '';
-        return { ok: false, reason: `latest staging deploy is still in flight since ${safeRequestedAt}${workflow}` };
-      }
+      const requested = describeRequestedDeployRecord(record);
+      if (requested) return { ok: false, reason: requested.reason };
       return { ok: false, reason: `latest record has status "${sanitizeReleaseGateDetail(record.status ?? 'unknown')}"` };
     }
     if (!record.verifiedAt) {
@@ -524,11 +584,6 @@ export function hasObservedStagingSuccess(
 ): boolean {
   return explainObservedStagingSuccess(records, surface, options).ok;
 }
-
-// Tolerate up to 5 minutes of clock skew between the probing machine and
-// the consumer of probe-state. Records more than this in the future are
-// treated as stale (either broken clock or a forged record).
-const FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 export type ProbeFreshnessState = 'healthy' | 'stale' | 'degraded' | 'unknown';
 

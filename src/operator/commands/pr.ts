@@ -1,5 +1,6 @@
 import {
   buildPrBody,
+  buildStaleBaseBlocker,
   collectChangedPaths,
   ensureTaskLockMatchesCurrent,
   findDenyListHits,
@@ -13,6 +14,7 @@ import {
   type LivePr,
 } from './helpers.ts';
 import { buildReleaseCheckMessage, emptyDeployConfig, evaluateReleaseReadiness, loadDeployConfig } from '../release-gate.ts';
+import { maybeHandleDestinationCommand } from './destination.ts';
 import {
   applyTaskBindingRecovery,
   diagnoseTaskBinding,
@@ -35,6 +37,8 @@ import {
 } from '../state.ts';
 
 export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise<void> {
+  if (await maybeHandleDestinationCommand(cwd, parsed)) return;
+
   const context = resolveWorkflowContext(cwd);
   let taskSlug = '';
   let lock: TaskLock | null = null;
@@ -95,6 +99,10 @@ export async function handlePr(cwd: string, parsed: ParsedOperatorArgs): Promise
   }
 
   const branchName = runGit(context.repoRoot, ['branch', '--show-current']) ?? '';
+  const staleBaseBlocker = buildStaleBaseBlocker(context, 'pr');
+  if (staleBaseBlocker) {
+    throw new Error(staleBaseBlocker);
+  }
   const statusText = runGit(context.repoRoot, ['status', '--short'], true) ?? '';
   const dirty = statusText.trim().length > 0;
   const existingPr = binding.livePr ?? loadOpenPrForBranch(context.repoRoot, branchName);
