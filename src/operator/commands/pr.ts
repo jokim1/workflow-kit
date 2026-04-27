@@ -4,6 +4,7 @@ import {
   ensureTaskLockMatchesCurrent,
   findDenyListHits,
   hasStagedChanges,
+  inferTaskSlugFromBranchName,
   latestCommitSubject,
   loadOpenPrForBranch,
   resolveCommandSurfaces,
@@ -28,6 +29,7 @@ import {
   runGit,
   runShell,
   savePrRecord,
+  slugifyTaskName,
   type ParsedOperatorArgs,
   type TaskLock,
 } from '../state.ts';
@@ -197,8 +199,7 @@ function resolvePrTaskBinding(
   context: ReturnType<typeof resolveWorkflowContext>,
   parsed: ParsedOperatorArgs,
 ):
-  | { status: 'resolved'; taskSlug: string; lock: TaskLock; livePr: null }
-  | { status: 'resolved'; taskSlug: string; lock: null; livePr: LivePr }
+  | { status: 'resolved'; taskSlug: string; lock: TaskLock | null; livePr: LivePr | null }
   | { status: 'handoff'; taskSlug: string; lock: TaskLock; message: string }
   | { status: 'needs-recovery'; diagnosis: Extract<ReturnType<typeof diagnoseTaskBinding>, { status: 'needs-recovery' }> }
   | { status: 'blocked'; reason: string } {
@@ -248,31 +249,33 @@ function resolveLocklessPrFromCurrentBranch(
   context: ReturnType<typeof resolveWorkflowContext>,
   explicitTask: string,
   blockedReason: string,
-): { status: 'resolved'; taskSlug: string; lock: null; livePr: LivePr } | null {
+): { status: 'resolved'; taskSlug: string; lock: null; livePr: LivePr | null } | null {
   if (!/^No task lock (matches|found)/.test(blockedReason)) {
     return null;
   }
 
   const branchName = runGit(context.repoRoot, ['branch', '--show-current'], true)?.trim() ?? '';
-  if (!branchName) {
+  if (!branchName || isBaseBranch(context, branchName)) {
     return null;
   }
   const livePr = loadOpenPrForBranch(context.repoRoot, branchName);
-  if (!livePr) {
-    return null;
-  }
 
-  const derivedTaskSlug = deriveTaskSlugFromPr(context.config, livePr, branchName);
-  const explicitSlug = explicitTask.trim()
-    ? deriveTaskSlugFromPr(context.config, { number: livePr.number, headRefName: explicitTask }, explicitTask)
-    : '';
+  const derivedTaskSlug = livePr
+    ? deriveTaskSlugFromPr(context.config, livePr, branchName)
+    : inferTaskSlugFromBranchName(context.config, branchName) || slugifyTaskName(branchName);
+  const explicitSlug = explicitTask.trim() ? slugifyTaskName(explicitTask) : '';
   if (explicitSlug && explicitSlug !== derivedTaskSlug) {
     return null;
   }
+
   return {
     status: 'resolved',
     taskSlug: explicitSlug || derivedTaskSlug,
     lock: null,
     livePr,
   };
+}
+
+function isBaseBranch(context: ReturnType<typeof resolveWorkflowContext>, branchName: string): boolean {
+  return branchName === context.config.baseBranch || branchName === 'main' || branchName === 'master';
 }

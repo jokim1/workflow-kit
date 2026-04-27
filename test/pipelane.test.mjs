@@ -5928,6 +5928,48 @@ test('lockless PR branch can report, merge by PR number, and deploy the merged P
   }
 });
 
+test('pr can create a new PR from a manual task branch without a task lock', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
+  const ghStateFile = path.join(ghBin, 'gh-state.json');
+  writeFakeGh(ghBin, ghStateFile);
+  const env = {
+    PATH: `${ghBin}:${process.env.PATH}`,
+    GH_STATE_FILE: ghStateFile,
+  };
+
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    runCli(['setup'], repoRoot);
+    updateWorkflowConfig(repoRoot, (config) => {
+      config.prePrChecks = [];
+    });
+    commitAll(repoRoot, 'Adopt pipelane');
+
+    execFileSync('git', ['checkout', '-b', 'task/fix-priority-sorting-e0ed'], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    writeFileSync(path.join(repoRoot, 'priority.txt'), 'sort priorities\n', 'utf8');
+
+    const opened = JSON.parse(runCli(['run', 'pr', '--title', 'Fix priority sorting', '--json'], repoRoot, env).stdout);
+    assert.equal(opened.taskSlug, 'fix-priority-sorting');
+    assert.equal(opened.branchName, 'task/fix-priority-sorting-e0ed');
+    assert.match(opened.url, /example\.test\/pr\/1/);
+
+    const lockPath = path.join(resolveCommonDir(repoRoot), 'pipelane-state', 'task-locks', 'fix-priority-sorting.json');
+    assert.equal(existsSync(lockPath), false, 'lockless /pr must not create a task lock for a manual branch');
+
+    const prState = JSON.parse(readFileSync(path.join(resolveCommonDir(repoRoot), 'pipelane-state', 'pr-state.json'), 'utf8'));
+    assert.equal(prState.records['fix-priority-sorting'].number, 1);
+    assert.equal(prState.records['fix-priority-sorting'].branchName, 'task/fix-priority-sorting-e0ed');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(ghBin, { recursive: true, force: true });
+  }
+});
+
 test('merge skips auto-deploy in build mode when autoDeployOnMerge is disabled', () => {
   const { repoRoot, remoteRoot } = createRemoteBackedRepo();
   const ghBin = mkdtempSync(path.join(os.tmpdir(), 'pipelane-gh-'));
