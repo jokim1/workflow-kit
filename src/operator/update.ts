@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { stopDashboardForRepo } from '../dashboard/launcher.ts';
@@ -13,13 +15,18 @@ import {
   type SetupDrift,
   setupConsumerRepo,
 } from './docs.ts';
-import { PIPELANE_GITHUB_URL, PIPELANE_REPO_SLUG, resolvePipelaneInstallSpec } from './install-source.ts';
-import { homeClaudeDir, homeCodexDir, resolveRepoRoot, runCommandCapture } from './state.ts';
+import { PIPELANE_GITHUB_URL, PIPELANE_REPO_SLUG, resolvePipelaneInstallSpec, resolvePipelaneInstallSpecForSha } from './install-source.ts';
+import { homeClaudeDir, homeCodexDir, readJsonFile, resolveRepoRoot, runCommandCapture, runGit, writeJsonFile } from './state.ts';
 
 export interface UpdateOptions {
   check: boolean;
   yes: boolean;
   json: boolean;
+  output?: UpdateOutputTarget;
+  initialStatus?: UpdateStatus;
+  postInstallLatestSha?: string;
+  stopBoard?: boolean;
+  followUp?: boolean;
 }
 
 export interface UpdateStatus {
@@ -47,6 +54,25 @@ export interface UpdateResult {
   ranSetup: boolean;
   globalSurfaces: GlobalSurfaceRefresh;
 }
+
+export type UpdateOutputTarget = 'stdout' | 'stderr' | 'silent';
+
+export interface AutoUpdateResult {
+  checked: boolean;
+  updated: boolean;
+  skippedReason: string | null;
+  status: UpdateStatus | null;
+}
+
+interface AutoUpdateCache {
+  checkedAt: string;
+  installedSha: string;
+  latestSha: string;
+  upToDate: boolean;
+}
+
+const AUTO_UPDATE_DEFAULT_TTL_MS = 60 * 60 * 1000;
+const AUTO_UPDATE_DEFAULT_TIMEOUT_MS = 5000;
 
 type GlobalSurfaceRefreshStatus = 'refreshed' | 'skipped' | 'failed';
 
@@ -76,9 +102,126 @@ export function parseUpdateArgs(argv: string[]): UpdateOptions {
   return options;
 }
 
+export async function maybeAutoUpdate(cwd: string): Promise<AutoUpdateResult> {
+  if (autoUpdateDisabled()) {
+    return { checked: false, updated: false, skippedReason: 'disabled', status: null };
+  }
+
+  let repoRoot: string;
+  try {
+    repoRoot = resolveRepoRoot(cwd, true);
+  } catch (error) {
+    return { checked: false, updated: false, skippedReason: error instanceof Error ? error.message : String(error), status: null };
+  }
+
+  const updateRoot = resolveAutoUpdateRoot(repoRoot);
+  if (!updateRoot) {
+    return { checked: false, updated: false, skippedReason: 'node_modules symlink target does not identify a shared repo checkout', status: null };
+  }
+
+  const packagePath = path.join(updateRoot, 'node_modules', 'pipelane', 'package.json');
+  if (!existsSync(packagePath)) {
+    return { checked: false, updated: false, skippedReason: 'pipelane is not installed in node_modules', status: null };
+  }
+
+  const installedSha = readInstalledShaFromLock(updateRoot);
+  if (!installedSha) {
+    return { checked: false, updated: false, skippedReason: 'installed pipelane commit is unknown', status: null };
+  }
+
+  const cached = readFreshAutoUpdateCache(updateRoot, installedSha);
+  if (cached) {
+    return {
+      checked: false,
+      updated: false,
+      skippedReason: 'fresh cache',
+      status: {
+        repoRoot: updateRoot,
+        installedSha,
+        installedShaShort: shortSha(installedSha),
+        latestSha: cached.latestSha,
+        latestShaShort: shortSha(cached.latestSha),
+        installedVersion: readInstalledVersion(packagePath),
+        upToDate: cached.upToDate,
+        aheadBy: null,
+        commits: [],
+      },
+    };
+  }
+
+  let status: UpdateStatus;
+  try {
+    status = collectUpdateStatus(updateRoot, { timeoutMs: autoUpdateTimeoutMs() });
+  } catch (error) {
+    return { checked: false, updated: false, skippedReason: error instanceof Error ? error.message : String(error), status: null };
+  }
+
+  if (status.upToDate) {
+    writeAutoUpdateCache(updateRoot, status);
+    return { checked: true, updated: false, skippedReason: null, status };
+  }
+
+  try {
+    process.stderr.write(`[pipelane] Auto-updating pipelane ${status.installedShaShort || '(unknown)'} -> ${status.latestShaShort} before continuing.\n`);
+    const result = await runUpdate(updateRoot, {
+      check: false,
+      yes: true,
+      json: false,
+      output: 'stderr',
+      initialStatus: status,
+      postInstallLatestSha: status.latestSha,
+      stopBoard: false,
+      followUp: false,
+    });
+    return { checked: true, updated: result.action === 'installed', skippedReason: null, status: result.status };
+  } catch (error) {
+    process.stderr.write(`[pipelane] Auto-update skipped: ${error instanceof Error ? error.message : String(error)}\n`);
+    return { checked: true, updated: false, skippedReason: error instanceof Error ? error.message : String(error), status };
+  }
+}
+
+function resolveAutoUpdateRoot(repoRoot: string): string | null {
+  const symlinkTarget = symlinkedNodeModulesTarget(repoRoot);
+  if (!symlinkTarget) {
+    return repoRoot;
+  }
+  if (path.basename(symlinkTarget) !== 'node_modules') {
+    return null;
+  }
+  const sharedRepoRoot = path.dirname(symlinkTarget);
+  const expectedSharedRoot = expectedSharedRepoRoot(repoRoot);
+  if (!expectedSharedRoot || normalizeAutoUpdatePath(sharedRepoRoot) !== normalizeAutoUpdatePath(expectedSharedRoot)) {
+    return null;
+  }
+  if (!existsSync(path.join(sharedRepoRoot, 'package-lock.json'))) {
+    return null;
+  }
+  return sharedRepoRoot;
+}
+
+function expectedSharedRepoRoot(repoRoot: string): string | null {
+  const commonDir = runGit(repoRoot, ['rev-parse', '--git-common-dir'], true);
+  if (!commonDir) {
+    return null;
+  }
+  const normalizedCommonDir = normalizeAutoUpdatePath(path.isAbsolute(commonDir) ? commonDir : path.join(repoRoot, commonDir));
+  if (normalizedCommonDir.includes(`${path.sep}.git${path.sep}modules${path.sep}`)) {
+    return null;
+  }
+  return path.dirname(normalizedCommonDir);
+}
+
+function normalizeAutoUpdatePath(targetPath: string): string {
+  try {
+    return realpathSync(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
 export async function runUpdate(cwd: string, options: UpdateOptions): Promise<UpdateResult> {
   const repoRoot = resolveRepoRoot(cwd, true);
-  const status = collectUpdateStatus(repoRoot);
+  const status = options.initialStatus ?? collectUpdateStatus(repoRoot);
 
   // --check path (pre-install) and upToDate path: run drift detection so the
   // operator sees whether the consumer's working tree is in sync with the
@@ -106,15 +249,15 @@ export async function runUpdate(cwd: string, options: UpdateOptions): Promise<Up
       process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
       return result;
     }
-    process.stdout.write(`${summary}\n`);
-    emitGlobalSurfaceRefreshHint(globalSurfaces);
+    writeUpdateOutput(options, `${summary}\n`);
+    emitGlobalSurfaceRefreshHint(globalSurfaces, options);
     if (!options.check) {
       const appliedAgentsMigration = await maybeApplyAgentsGuidanceMigrationsFromDrift(driftResult.drift, options.yes);
       if (appliedAgentsMigration) {
         driftResult = tryDetectDrift(repoRoot);
       }
     }
-    emitDriftHint(driftResult);
+    emitDriftHint(driftResult, options);
     return {
       status,
       action: status.upToDate ? 'up-to-date' : 'checked',
@@ -129,17 +272,44 @@ export async function runUpdate(cwd: string, options: UpdateOptions): Promise<Up
   // setup inline if needed. The user invoked `pipelane update` — that is
   // the consent. For read-only inspection, use `--check`.
   const summary = buildStatusMessage(status);
-  if (!options.json) process.stdout.write(`${summary}\n`);
+  if (!options.json) writeUpdateOutput(options, `${summary}\n`);
 
   assertSafeNpmInstallTarget(repoRoot);
-  installLatest(repoRoot, { quiet: options.json });
-  const boardStop = await stopDashboardForRepo(repoRoot);
+  installLatest(repoRoot, {
+    quiet: options.json,
+    output: options.output,
+    installSpec: resolvePipelaneInstallSpecForSha(status.latestSha),
+  });
+  const boardStop = options.stopBoard === false
+    ? { stopped: false, pid: null, reason: 'dashboard stop skipped' }
+    : await stopDashboardForRepo(repoRoot);
 
-  const after = collectUpdateStatus(repoRoot);
+  const after = options.postInstallLatestSha
+    ? collectUpdateStatusFromKnownLatest(repoRoot, options.postInstallLatestSha)
+    : collectUpdateStatus(repoRoot);
   const tail = after.upToDate
     ? `Installed ${after.installedShaShort} (up to date).`
     : `Installed pipelane; now at ${after.installedShaShort} (remote main: ${after.latestShaShort}).`;
   const message = `Upgrade complete.\n${tail}`;
+
+  if (options.followUp === false) {
+    const result: UpdateResult = {
+      status: after,
+      action: 'installed',
+      message,
+      followUpSteps: null,
+      ranSetup: false,
+      globalSurfaces: skippedGlobalSurfaces('implicit auto-update install-only'),
+    };
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return result;
+    }
+    if (!options.json) {
+      writeUpdateOutput(options, `${message}\n`);
+    }
+    return result;
+  }
 
   let driftResult = tryDetectDrift(repoRoot);
   const globalSurfaces = refreshInstalledGlobalSurfaces(repoRoot);
@@ -157,18 +327,18 @@ export async function runUpdate(cwd: string, options: UpdateOptions): Promise<Up
     return result;
   }
 
-  process.stdout.write(`${message}\n`);
+  writeUpdateOutput(options, `${message}\n`);
   if (boardStop.stopped) {
-    process.stdout.write(`Stopped existing Pipelane Board (PID ${boardStop.pid}) so the next board start uses the updated package.\n`);
+    writeUpdateOutput(options, `Stopped existing Pipelane Board (PID ${boardStop.pid}) so the next board start uses the updated package.\n`);
   }
-  emitGlobalSurfaceRefreshHint(globalSurfaces);
+  emitGlobalSurfaceRefreshHint(globalSurfaces, options);
   if (!driftResult.drift?.needsSetup) {
     const appliedAgentsMigration = await maybeApplyAgentsGuidanceMigrationsFromDrift(driftResult.drift, options.yes);
     if (appliedAgentsMigration) {
       driftResult = tryDetectDrift(repoRoot);
     }
   }
-  emitDriftHint(driftResult);
+  emitDriftHint(driftResult, options);
 
   let ranSetup = false;
   const drift = driftResult.drift;
@@ -177,8 +347,8 @@ export async function runUpdate(cwd: string, options: UpdateOptions): Promise<Up
       setupConsumerRepo(repoRoot),
       options.yes,
     );
-    process.stdout.write('\n' + formatSetupResult(setupResult).join('\n') + '\n');
-    emitReopenHints(drift);
+    writeUpdateOutput(options, '\n' + formatSetupResult(setupResult).join('\n') + '\n');
+    emitReopenHints(drift, options);
     ranSetup = true;
   }
 
@@ -190,6 +360,95 @@ export async function runUpdate(cwd: string, options: UpdateOptions): Promise<Up
     ranSetup,
     globalSurfaces,
   };
+}
+
+function writeUpdateOutput(options: Pick<UpdateOptions, 'output'>, text: string): void {
+  const target = options.output ?? 'stdout';
+  if (target === 'silent') {
+    return;
+  }
+  if (target === 'stderr') {
+    process.stderr.write(text);
+    return;
+  }
+  process.stdout.write(text);
+}
+
+function autoUpdateDisabled(): boolean {
+  if (process.env.PIPELANE_AUTO_UPDATE_REEXECED === '1') {
+    return true;
+  }
+  const raw = process.env.PIPELANE_AUTO_UPDATE?.trim().toLowerCase();
+  return raw === '0' || raw === 'false' || raw === 'off' || raw === 'no';
+}
+
+function autoUpdateTtlMs(): number {
+  const raw = process.env.PIPELANE_AUTO_UPDATE_TTL_MS?.trim();
+  if (!raw) {
+    return AUTO_UPDATE_DEFAULT_TTL_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : AUTO_UPDATE_DEFAULT_TTL_MS;
+}
+
+function autoUpdateTimeoutMs(): number {
+  const raw = process.env.PIPELANE_AUTO_UPDATE_TIMEOUT_MS?.trim();
+  if (!raw) {
+    return AUTO_UPDATE_DEFAULT_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : AUTO_UPDATE_DEFAULT_TIMEOUT_MS;
+}
+
+function pipelaneHomeDir(): string {
+  return process.env.PIPELANE_HOME || path.join(os.homedir(), '.pipelane');
+}
+
+function autoUpdateCachePath(repoRoot: string): string {
+  let resolved = repoRoot;
+  try {
+    resolved = realpathSync(repoRoot);
+  } catch {
+    // Use the normalized repo root if the path cannot be resolved.
+  }
+  const key = createHash('sha256').update(resolved).digest('hex').slice(0, 24);
+  return path.join(pipelaneHomeDir(), 'update-checks', `${key}.json`);
+}
+
+function readFreshAutoUpdateCache(repoRoot: string, installedSha: string): AutoUpdateCache | null {
+  try {
+    const cachePath = autoUpdateCachePath(repoRoot);
+    if (!existsSync(cachePath)) {
+      return null;
+    }
+    const cache = readJsonFile<AutoUpdateCache | null>(cachePath, null);
+    if (!cache || cache.installedSha !== installedSha || !cache.latestSha || !cache.checkedAt || cache.upToDate !== true) {
+      return null;
+    }
+    const checkedAt = Date.parse(cache.checkedAt);
+    if (!Number.isFinite(checkedAt)) {
+      return null;
+    }
+    if (Date.now() - checkedAt > autoUpdateTtlMs()) {
+      return null;
+    }
+    return cache;
+  } catch {
+    return null;
+  }
+}
+
+function writeAutoUpdateCache(repoRoot: string, status: UpdateStatus): void {
+  try {
+    writeJsonFile(autoUpdateCachePath(repoRoot), {
+      checkedAt: new Date().toISOString(),
+      installedSha: status.installedSha,
+      latestSha: status.latestSha,
+      upToDate: status.upToDate,
+    } satisfies AutoUpdateCache);
+  } catch {
+    // Cache failures must never block the actual pipelane command.
+  }
 }
 
 interface DriftResult {
@@ -356,7 +615,7 @@ function assertSafeNpmInstallTarget(repoRoot: string): void {
   ].join('\n'));
 }
 
-function emitGlobalSurfaceRefreshHint(result: GlobalSurfaceRefresh): void {
+function emitGlobalSurfaceRefreshHint(result: GlobalSurfaceRefresh, options: Pick<UpdateOptions, 'output'>): void {
   const lines: string[] = [];
   if (result.codex.status === 'refreshed') {
     lines.push('Refreshed machine-local Codex commands. Restart Codex if command discovery is already loaded.');
@@ -371,14 +630,14 @@ function emitGlobalSurfaceRefreshHint(result: GlobalSurfaceRefresh): void {
   }
 
   if (lines.length > 0) {
-    process.stdout.write(`\n${lines.join('\n')}\n`);
+    writeUpdateOutput(options, `\n${lines.join('\n')}\n`);
   }
 }
 
-function emitDriftHint(result: DriftResult): void {
+function emitDriftHint(result: DriftResult, options: Pick<UpdateOptions, 'output'>): void {
   if (result.error) {
-    process.stdout.write(`\n[pipelane] Skipped drift detection: ${result.error}\n`);
-    process.stdout.write('Run `pipelane init` or `pipelane bootstrap` to enable setup follow-up.\n');
+    writeUpdateOutput(options, `\n[pipelane] Skipped drift detection: ${result.error}\n`);
+    writeUpdateOutput(options, 'Run `pipelane init` or `pipelane bootstrap` to enable setup follow-up.\n');
     return;
   }
   const drift = result.drift;
@@ -387,28 +646,28 @@ function emitDriftHint(result: DriftResult): void {
   const agentsGuidanceMigrations = drift.agentsGuidanceMigrations ?? [];
   if (!drift.needsSetup) {
     if (agentsGuidanceMigrations.length > 0) {
-      process.stdout.write('\nAGENTS.md guidance migration requires approval:\n');
-      process.stdout.write(formatAgentsGuidanceMigrations(agentsGuidanceMigrations).join('\n') + '\n');
-      process.stdout.write('Run `pipelane setup --yes` to apply these AGENTS.md changes non-interactively, or run `pipelane setup` in a TTY and approve the prompt.\n');
+      writeUpdateOutput(options, '\nAGENTS.md guidance migration requires approval:\n');
+      writeUpdateOutput(options, formatAgentsGuidanceMigrations(agentsGuidanceMigrations).join('\n') + '\n');
+      writeUpdateOutput(options, 'Run `pipelane setup --yes` to apply these AGENTS.md changes non-interactively, or run `pipelane setup` in a TTY and approve the prompt.\n');
       return;
     }
     if (warnings.length > 0) {
-      process.stdout.write('\nReadiness warnings:\n');
-      process.stdout.write(warnings.map((warning) => `- ${warning}`).join('\n') + '\n');
+      writeUpdateOutput(options, '\nReadiness warnings:\n');
+      writeUpdateOutput(options, warnings.map((warning) => `- ${warning}`).join('\n') + '\n');
       return;
     }
-    process.stdout.write('\nNo additional steps required — templates are in sync.\n');
+    writeUpdateOutput(options, '\nNo additional steps required — templates are in sync.\n');
     return;
   }
-  process.stdout.write('\n' + formatFollowUpSummary(drift) + '\n');
+  writeUpdateOutput(options, '\n' + formatFollowUpSummary(drift) + '\n');
 }
 
-function emitReopenHints(drift: SetupDrift): void {
+function emitReopenHints(drift: SetupDrift, options: Pick<UpdateOptions, 'output'>): void {
   if (drift.needsReopenClaude) {
-    process.stdout.write('Reopen Claude so the new or renamed slash commands appear.\n');
+    writeUpdateOutput(options, 'Reopen Claude so the new or renamed slash commands appear.\n');
   }
   if (drift.needsReopenCodex) {
-    process.stdout.write('Reopen Codex to pick up .agents/skills changes.\n');
+    writeUpdateOutput(options, 'Reopen Codex to pick up .agents/skills changes.\n');
   }
 }
 
@@ -476,15 +735,19 @@ function truncateList(entries: string[], cap = 8): string {
   return `${entries.slice(0, cap).join(', ')}, +${entries.length - cap} more`;
 }
 
-export function collectUpdateStatus(repoRoot: string): UpdateStatus {
+export function collectUpdateStatus(
+  repoRoot: string,
+  options: { timeoutMs?: number } = {},
+): UpdateStatus {
   const { installedSha, installedVersion } = resolveInstalledPipelane(repoRoot);
-  const latestSha = fetchLatestMainSha();
+  const deadlineMs = options.timeoutMs === undefined ? null : Date.now() + options.timeoutMs;
+  const latestSha = fetchLatestMainSha(remainingUpdateTimeoutMs(deadlineMs, options.timeoutMs));
   const upToDate = Boolean(installedSha) && installedSha === latestSha;
 
   let aheadBy: number | null = null;
   let commits: Array<{ sha: string; subject: string }> = [];
   if (!upToDate && installedSha) {
-    const compare = fetchCompare(installedSha, latestSha);
+    const compare = fetchCompare(installedSha, latestSha, remainingUpdateTimeoutMs(deadlineMs, options.timeoutMs));
     if (compare) {
       aheadBy = compare.aheadBy;
       commits = compare.commits;
@@ -502,6 +765,33 @@ export function collectUpdateStatus(repoRoot: string): UpdateStatus {
     aheadBy,
     commits,
   };
+}
+
+function collectUpdateStatusFromKnownLatest(repoRoot: string, latestSha: string): UpdateStatus {
+  const { installedSha, installedVersion } = resolveInstalledPipelane(repoRoot);
+  const normalizedLatestSha = latestSha.toLowerCase();
+  return {
+    repoRoot,
+    installedSha,
+    installedShaShort: shortSha(installedSha),
+    latestSha: normalizedLatestSha,
+    latestShaShort: shortSha(normalizedLatestSha),
+    installedVersion,
+    upToDate: Boolean(installedSha) && installedSha === normalizedLatestSha,
+    aheadBy: null,
+    commits: [],
+  };
+}
+
+function remainingUpdateTimeoutMs(deadlineMs: number | null, originalTimeoutMs: number | undefined): number | undefined {
+  if (deadlineMs === null || originalTimeoutMs === undefined) {
+    return undefined;
+  }
+  const remainingMs = deadlineMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`Timed out after ${originalTimeoutMs}ms while checking for pipelane updates.`);
+  }
+  return Math.max(1, Math.floor(remainingMs));
 }
 
 function resolveInstalledPipelane(repoRoot: string): { installedSha: string; installedVersion: string } {
@@ -555,8 +845,8 @@ function extractShaFromResolved(resolved: string | undefined): string {
   return /^[a-f0-9]{7,40}$/i.test(candidate) ? candidate.toLowerCase() : '';
 }
 
-function fetchLatestMainSha(): string {
-  const result = runCommandCapture('git', ['ls-remote', PIPELANE_GITHUB_URL, 'main']);
+function fetchLatestMainSha(timeoutMs?: number): string {
+  const result = runCommandCapture('git', ['ls-remote', PIPELANE_GITHUB_URL, 'main'], { timeoutMs });
   if (!result.ok || !result.stdout) {
     throw new Error(
       `Could not fetch latest main SHA from ${PIPELANE_GITHUB_URL}: ${result.stderr || 'no output'}`,
@@ -572,11 +862,12 @@ function fetchLatestMainSha(): string {
 function fetchCompare(
   fromSha: string,
   toSha: string,
+  timeoutMs?: number,
 ): { aheadBy: number; commits: Array<{ sha: string; subject: string }> } | null {
   const result = runCommandCapture('gh', [
     'api',
     `repos/${PIPELANE_REPO_SLUG}/compare/${fromSha}...${toSha}`,
-  ]);
+  ], { timeoutMs });
   if (!result.ok || !result.stdout) return null;
   try {
     const parsed = JSON.parse(result.stdout) as {
@@ -593,14 +884,22 @@ function fetchCompare(
   }
 }
 
-function installLatest(repoRoot: string, options: { quiet?: boolean } = {}): void {
-  const result = runCommandCapture('npm', ['install', resolvePipelaneInstallSpec()], { cwd: repoRoot });
+function installLatest(repoRoot: string, options: { quiet?: boolean; output?: UpdateOutputTarget; installSpec?: string } = {}): void {
+  const result = runCommandCapture('npm', ['install', options.installSpec ?? resolvePipelaneInstallSpec()], { cwd: repoRoot });
   if (!result.ok) {
     const detail = result.stderr || result.stdout;
     throw new Error(`npm install failed:\n${detail}`);
   }
-  if (!options.quiet && result.stdout) process.stdout.write(`${result.stdout}\n`);
-  if (!options.quiet && result.stderr) process.stderr.write(`${result.stderr}\n`);
+  if (options.quiet) {
+    return;
+  }
+  if (result.stdout) {
+    writeUpdateOutput({ output: options.output }, `${result.stdout}\n`);
+  }
+  if (result.stderr) {
+    const target = options.output === 'silent' ? 'silent' : 'stderr';
+    writeUpdateOutput({ output: target }, `${result.stderr}\n`);
+  }
 }
 
 function buildStatusMessage(status: UpdateStatus): string {

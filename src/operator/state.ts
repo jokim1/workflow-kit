@@ -753,11 +753,12 @@ export function runCommand(
 export function runCommandCapture(
   command: string,
   args: string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
 ): { ok: boolean; exitCode: number; stdout: string; stderr: string } {
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     env: options.env,
+    timeout: options.timeoutMs,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });

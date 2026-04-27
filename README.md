@@ -242,6 +242,12 @@ current repo. `/init-pipelane` is still available when you intentionally want to
 attach a repo; it prompts before writing `.pipelane.json`, `.claude/`,
 `.agents/`, package scripts, docs, or other generated files.
 
+Durable defaults boot through their managed Pipelane runtime first. If the
+repo-local `node_modules/.bin/pipelane` is pinned to an older Pipelane commit,
+normal workflow commands auto-install the latest main commit and then re-run via
+the updated repo-local binary. `pipelane update` remains the explicit manual
+update path.
+
 To guard raw npm installs in worktrees whose `node_modules` is a symlink:
 
 ```bash

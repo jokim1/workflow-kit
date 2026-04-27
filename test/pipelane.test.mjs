@@ -22,6 +22,7 @@ const LOCAL_PIPELANE_INSTALL_SPEC = `file:${KIT_ROOT}`;
 // activate when NODE_ENV is 'test', which prevents a stray env var in a
 // shared shell from disabling a safety gate.
 process.env.NODE_ENV = 'test';
+process.env.PIPELANE_AUTO_UPDATE = '0';
 
 function run(command, args, cwd, env = {}) {
   return execFileSync(command, args, {
@@ -3416,7 +3417,7 @@ test('tracked Codex wrapper prefers the repo-local pipelane install', () => {
     mkdirSync(path.join(codexHome, 'skills', '.pipelane', 'bin'), { recursive: true });
     writeFileSync(
       path.join(codexHome, 'skills', '.pipelane', 'bin', 'pipelane'),
-      '#!/bin/sh\necho "GLOBAL:$*"\n',
+      `#!/bin/sh\nexec node "${CLI_PATH}" "$@"\n`,
       { mode: 0o755, encoding: 'utf8' },
     );
 
@@ -3474,6 +3475,56 @@ test('durable Codex runner routes /pipelane update through the managed runtime',
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(codexHome, { recursive: true, force: true });
+  }
+});
+
+test('durable Codex runner enters managed runtime before a stale repo-local pipelane', () => {
+  const repoRoot = createRepo();
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+
+  try {
+    runCli(['install-codex'], repoRoot, { CODEX_HOME: codexHome });
+    writeFakeConsumer(repoRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    writeAutoUpdateAwareLocalBin(repoRoot, { newSha });
+    writeFileSync(
+      path.join(codexHome, 'skills', '.pipelane', 'bin', 'pipelane'),
+      `#!/bin/sh\nexec node "${CLI_PATH}" "$@"\n`,
+      { mode: 0o755, encoding: 'utf8' },
+    );
+    makeFakeUpdateBin(binDir, { latestSha: newSha });
+
+    const result = spawnSync(path.join(codexHome, 'skills', '.pipelane', 'bin', 'run-pipelane.sh'), ['status', '--json'], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CLAUDE_HOME: claudeHome,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'LOCAL_AFTER_UPDATE:run status --json');
+    assert.match(result.stderr, /Auto-updating pipelane 1111111 -> 2222222/);
+    assert.doesNotMatch(result.stderr, /STALE_LOCAL_BEFORE_UPDATE/);
+    const lock = JSON.parse(readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'));
+    assert.equal(lock.packages['node_modules/pipelane'].resolved.endsWith(`#${newSha}`), true);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
   }
 });
 
@@ -9283,18 +9334,39 @@ test('board status reports unreachable port and no PID file', async () => {
   }
 });
 
-function makeFakeUpdateBin(binDir, { latestSha, aheadCommits = [] }) {
+function makeFakeUpdateBin(
+  binDir,
+  {
+    latestSha,
+    aheadCommits = [],
+    gitMarkerPath = '',
+    gitDelayMs = 0,
+    compareDelayMs = 0,
+    compareMarkerPath = '',
+    npmMarkerPath = '',
+  },
+) {
   mkdirSync(binDir, { recursive: true });
   const gitPath = path.join(binDir, 'git');
   writeFileSync(gitPath, `#!/usr/bin/env node
 const args = process.argv.slice(2);
 if (args[0] === 'ls-remote' && args[2] === 'main') {
-  process.stdout.write(${JSON.stringify(latestSha)} + '\\trefs/heads/main\\n');
-  process.exit(0);
+  const markerPath = ${JSON.stringify(gitMarkerPath)};
+  const emit = () => {
+    if (markerPath) {
+      require('node:fs').appendFileSync(markerPath, 'git ls-remote\\n', 'utf8');
+    }
+    process.stdout.write(${JSON.stringify(latestSha)} + '\\trefs/heads/main\\n');
+    process.exit(0);
+  };
+  const delayMs = ${JSON.stringify(gitDelayMs)};
+  if (delayMs > 0) setTimeout(emit, delayMs);
+  else emit();
+} else {
+  const { spawnSync } = require('node:child_process');
+  const res = spawnSync('/usr/bin/git', args, { stdio: 'inherit' });
+  process.exit(res.status ?? 1);
 }
-const { spawnSync } = require('node:child_process');
-const res = spawnSync('/usr/bin/git', args, { stdio: 'inherit' });
-process.exit(res.status ?? 1);
 `, { mode: 0o755, encoding: 'utf8' });
 
   const ghPath = path.join(binDir, 'gh');
@@ -9302,11 +9374,21 @@ process.exit(res.status ?? 1);
 const args = process.argv.slice(2);
 if (args[0] === 'api' && /compare/.test(args[1] || '')) {
   const commits = ${JSON.stringify(aheadCommits)};
-  process.stdout.write(JSON.stringify({ ahead_by: commits.length, commits: commits.map((c) => ({ sha: c.sha, commit: { message: c.subject } })) }));
-  process.exit(0);
+  const markerPath = ${JSON.stringify(compareMarkerPath)};
+  const emit = () => {
+    if (markerPath) {
+      require('node:fs').appendFileSync(markerPath, 'gh compare\\n', 'utf8');
+    }
+    process.stdout.write(JSON.stringify({ ahead_by: commits.length, commits: commits.map((c) => ({ sha: c.sha, commit: { message: c.subject } })) }));
+    process.exit(0);
+  };
+  const delayMs = ${JSON.stringify(compareDelayMs)};
+  if (delayMs > 0) setTimeout(emit, delayMs);
+  else emit();
+} else {
+  process.stderr.write('unsupported fake gh call: ' + args.join(' '));
+  process.exit(1);
 }
-process.stderr.write('unsupported fake gh call: ' + args.join(' '));
-process.exit(1);
 `, { mode: 0o755, encoding: 'utf8' });
 
   const npmPath = path.join(binDir, 'npm');
@@ -9315,6 +9397,10 @@ const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('node:fs'
 const path = require('node:path');
 const args = process.argv.slice(2);
 if (args[0] === 'install') {
+  const markerPath = ${JSON.stringify(npmMarkerPath)};
+  if (markerPath) {
+    require('node:fs').appendFileSync(markerPath, args.join(' ') + '\\n', 'utf8');
+  }
   const root = process.cwd();
   const lockPath = path.join(root, 'package-lock.json');
   const lock = existsSync(lockPath) ? JSON.parse(readFileSync(lockPath, 'utf8')) : { lockfileVersion: 3, packages: {} };
@@ -9334,6 +9420,22 @@ if (args[0] === 'install') {
 process.stderr.write('unsupported fake npm call: ' + args.join(' '));
 process.exit(1);
 `, { mode: 0o755, encoding: 'utf8' });
+}
+
+function writeAutoUpdateAwareLocalBin(repoRoot, { newSha }) {
+  mkdirSync(path.join(repoRoot, 'node_modules', '.bin'), { recursive: true });
+  writeFileSync(
+    path.join(repoRoot, 'node_modules', '.bin', 'pipelane'),
+    `#!/bin/sh
+if grep -q "${newSha}" package-lock.json; then
+  echo "LOCAL_AFTER_UPDATE:$*"
+  exit 0
+fi
+echo "STALE_LOCAL_BEFORE_UPDATE:$*" >&2
+exit 42
+`,
+    { mode: 0o755, encoding: 'utf8' },
+  );
 }
 
 function writeFakeConsumer(consumerRoot, { installedVersion, installedSha }) {
@@ -9365,6 +9467,519 @@ function writeFakeConsumer(consumerRoot, { installedVersion, installedSha }) {
     'utf8',
   );
 }
+
+function autoUpdateCachePathForTest(repoRoot, pipelaneHome) {
+  const key = createHash('sha256').update(realpathSync(repoRoot)).digest('hex').slice(0, 24);
+  return path.join(pipelaneHome, 'update-checks', `${key}.json`);
+}
+
+test('CLI auto-updates workflow commands and re-execs the updated local bin without stdout noise', () => {
+  const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-consumer-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const npmInstallLog = path.join(consumerRoot, 'npm-install.log');
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  try {
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    mkdirSync(path.join(consumerRoot, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(
+      path.join(consumerRoot, 'node_modules', '.bin', 'pipelane'),
+      '#!/bin/sh\necho "REEXEC:$*"\n',
+      { mode: 0o755, encoding: 'utf8' },
+    );
+    makeFakeUpdateBin(binDir, { latestSha: newSha, npmMarkerPath: npmInstallLog });
+
+    const result = spawnSync('node', [CLI_PATH, 'run', 'status', '--json'], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CLAUDE_HOME: claudeHome,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'REEXEC:run status --json');
+    assert.match(result.stderr, /Auto-updating pipelane 1111111 -> 2222222/);
+    assert.match(result.stderr, /Upgrade complete/);
+    assert.doesNotMatch(result.stdout, /Auto-updating|Upgrade complete|pipelane has updates available/);
+    assert.match(readFileSync(npmInstallLog, 'utf8'), new RegExp(`#${newSha}`));
+    assert.doesNotMatch(readFileSync(npmInstallLog, 'utf8'), /#main/);
+    const lock = JSON.parse(readFileSync(path.join(consumerRoot, 'package-lock.json'), 'utf8'));
+    assert.equal(lock.packages['node_modules/pipelane'].resolved.endsWith(`#${newSha}`), true);
+  } finally {
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI auto-update does not stop a running board during implicit command updates', async () => {
+  const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-consumer-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const dashboardHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-dashboard-home-'));
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  const port = await getFreePort();
+  const resolvedConsumerRoot = realpathSync(consumerRoot);
+  const dashboardChild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+  const fakeServer = createHttpServer((req, res) => {
+    if (req.url === '/api/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, repoRoot: resolvedConsumerRoot, pid: dashboardChild.pid }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  fakeServer.listen(port, '127.0.0.1');
+  await once(fakeServer, 'listening');
+
+  try {
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    mkdirSync(path.join(consumerRoot, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(
+      path.join(consumerRoot, 'node_modules', '.bin', 'pipelane'),
+      '#!/bin/sh\necho "REEXEC:$*"\n',
+      { mode: 0o755, encoding: 'utf8' },
+    );
+    makeFakeUpdateBin(binDir, { latestSha: newSha });
+    writeDashboardSettingsForTest(dashboardHome, resolvedConsumerRoot, { preferredPort: port });
+    writeDashboardPidForTest(dashboardHome, resolvedConsumerRoot, dashboardChild.pid);
+
+    const result = spawnSync('node', [CLI_PATH, 'run', 'status', '--json'], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CLAUDE_HOME: claudeHome,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_DASHBOARD_HOME: dashboardHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PORT: String(port),
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'REEXEC:run status --json');
+    assert.match(result.stderr, /Auto-updating pipelane 1111111 -> 2222222/);
+    assert.doesNotMatch(result.stderr, /Stopped existing Pipelane Board/);
+    assert.equal(isPidAlive(dashboardChild.pid), true, 'implicit auto-update must not stop a running board');
+  } finally {
+    fakeServer.close();
+    await once(fakeServer, 'close').catch(() => undefined);
+    if (isPidAlive(dashboardChild.pid)) {
+      dashboardChild.kill();
+    }
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
+    rmSync(dashboardHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI auto-update cache write failures do not block commands', async () => {
+  const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-consumer-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const pipelaneHomeFile = path.join(consumerRoot, 'not-a-directory');
+  const installedSha = '2222222222222222222222222222222222222222';
+  const port = await getFreePort();
+  try {
+    writeFileSync(pipelaneHomeFile, 'file blocks cache dir creation\n', 'utf8');
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha });
+    makeFakeUpdateBin(binDir, { latestSha: installedSha });
+
+    const result = spawnSync('node', [CLI_PATH, 'board', 'status'], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        PIPELANE_HOME: pipelaneHomeFile,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PORT: String(port),
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`Port:   ${port}`));
+    assert.match(result.stdout, /Health: unreachable/);
+  } finally {
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI auto-update ignores cached stale status entries', () => {
+  const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-consumer-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const npmInstallLog = path.join(consumerRoot, 'npm-install.log');
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  try {
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    mkdirSync(path.join(consumerRoot, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(
+      path.join(consumerRoot, 'node_modules', '.bin', 'pipelane'),
+      '#!/bin/sh\necho "REEXEC:$*"\n',
+      { mode: 0o755, encoding: 'utf8' },
+    );
+    const cachePath = autoUpdateCachePathForTest(consumerRoot, pipelaneHome);
+    mkdirSync(path.dirname(cachePath), { recursive: true });
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        checkedAt: new Date().toISOString(),
+        installedSha: oldSha,
+        latestSha: newSha,
+        upToDate: false,
+      }, null, 2) + '\n',
+      'utf8',
+    );
+    makeFakeUpdateBin(binDir, { latestSha: newSha, npmMarkerPath: npmInstallLog });
+
+    const result = spawnSync('node', [CLI_PATH, 'run', 'status', '--json'], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CLAUDE_HOME: claudeHome,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'REEXEC:run status --json');
+    assert.match(result.stderr, /Auto-updating pipelane 1111111 -> 2222222/);
+    assert.match(readFileSync(npmInstallLog, 'utf8'), new RegExp(`#${newSha}`));
+  } finally {
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI implicit auto-update installs only and does not run setup follow-up', () => {
+  const consumerRoot = createRepo();
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  try {
+    runCli(['init', '--project', 'Demo App'], consumerRoot);
+    rmSync(path.join(consumerRoot, '.claude'), { recursive: true, force: true });
+    rmSync(path.join(consumerRoot, '.agents'), { recursive: true, force: true });
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    mkdirSync(path.join(consumerRoot, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(
+      path.join(consumerRoot, 'node_modules', '.bin', 'pipelane'),
+      '#!/bin/sh\necho "REEXEC:$*"\n',
+      { mode: 0o755, encoding: 'utf8' },
+    );
+    makeFakeUpdateBin(binDir, { latestSha: newSha });
+
+    const result = spawnSync('node', [CLI_PATH, 'run', 'status', '--json'], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CLAUDE_HOME: claudeHome,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'REEXEC:run status --json');
+    assert.doesNotMatch(result.stderr, /Follow-up needed|Wrote \\.claude|Wrote \\.agents/);
+    assert.equal(existsSync(path.join(consumerRoot, '.claude', 'commands')), false);
+    assert.equal(existsSync(path.join(consumerRoot, '.agents', 'skills')), false);
+  } finally {
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI auto-update ignores node_modules symlinks outside the shared checkout', async () => {
+  const consumerRoot = createRepo();
+  const unrelatedRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-unrelated-shared-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const npmInstallLog = path.join(unrelatedRoot, 'npm-install.log');
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  const port = await getFreePort();
+  try {
+    writeFakeConsumer(unrelatedRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    rmSync(path.join(consumerRoot, 'node_modules'), { recursive: true, force: true });
+    symlinkSync(path.join(unrelatedRoot, 'node_modules'), path.join(consumerRoot, 'node_modules'), 'dir');
+    makeFakeUpdateBin(binDir, { latestSha: newSha, npmMarkerPath: npmInstallLog });
+
+    const result = spawnSync('node', [CLI_PATH, 'board', 'status'], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PORT: String(port),
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, new RegExp(`Port:   ${port}`));
+    assert.equal(existsSync(npmInstallLog), false, 'unrelated symlink target must not be npm-installed');
+    const unrelatedLock = JSON.parse(readFileSync(path.join(unrelatedRoot, 'package-lock.json'), 'utf8'));
+    assert.equal(unrelatedLock.packages['node_modules/pipelane'].resolved.endsWith(`#${oldSha}`), true);
+  } finally {
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(unrelatedRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
+  }
+});
+
+test('collectUpdateStatus applies one timeout budget across remote status calls', async () => {
+  const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-consumer-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const compareMarkerPath = path.join(consumerRoot, 'compare-completed.txt');
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  const originalPath = process.env.PATH;
+  try {
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    makeFakeUpdateBin(binDir, {
+      latestSha: newSha,
+      aheadCommits: [{ sha: newSha, subject: 'newer pipelane' }],
+      gitDelayMs: 500,
+      compareDelayMs: 800,
+      compareMarkerPath,
+    });
+
+    process.env.PATH = `${binDir}:${originalPath}`;
+    const update = await import(path.join(KIT_ROOT, 'src', 'operator', 'update.ts'));
+    const status = update.collectUpdateStatus(consumerRoot, { timeoutMs: 900 });
+
+    assert.equal(status.installedSha, oldSha);
+    assert.equal(status.latestSha, newSha);
+    assert.equal(status.upToDate, false);
+    assert.equal(status.aheadBy, null);
+    assert.equal(existsSync(compareMarkerPath), false);
+  } finally {
+    process.env.PATH = originalPath;
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
+test('CLI auto-update reuses the bounded status check during install', () => {
+  const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-consumer-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const remoteCallLog = path.join(consumerRoot, 'remote-calls.log');
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  try {
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    mkdirSync(path.join(consumerRoot, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(
+      path.join(consumerRoot, 'node_modules', '.bin', 'pipelane'),
+      '#!/bin/sh\necho "REEXEC:$*"\n',
+      { mode: 0o755, encoding: 'utf8' },
+    );
+    makeFakeUpdateBin(binDir, {
+      latestSha: newSha,
+      aheadCommits: [{ sha: newSha, subject: 'newer pipelane' }],
+      gitMarkerPath: remoteCallLog,
+      compareMarkerPath: remoteCallLog,
+    });
+
+    const result = spawnSync('node', [CLI_PATH, 'run', 'status', '--json'], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CLAUDE_HOME: claudeHome,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'REEXEC:run status --json');
+    assert.deepEqual(readFileSync(remoteCallLog, 'utf8').trim().split('\n'), [
+      'git ls-remote',
+      'gh compare',
+    ]);
+  } finally {
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI auto-update fails visibly when the updated local bin is unavailable', () => {
+  const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-consumer-'));
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  try {
+    writeFakeConsumer(consumerRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    makeFakeUpdateBin(binDir, { latestSha: newSha });
+
+    const result = spawnSync('node', [CLI_PATH, 'run', 'status', '--json'], {
+      cwd: consumerRoot,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CLAUDE_HOME: claudeHome,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /auto-update completed, but the updated local executable is unavailable/);
+    assert.doesNotMatch(result.stdout, /status/);
+    const cacheDir = path.join(pipelaneHome, 'update-checks');
+    assert.equal(existsSync(cacheDir) ? readdirSync(cacheDir).length : 0, 0);
+    const lock = JSON.parse(readFileSync(path.join(consumerRoot, 'package-lock.json'), 'utf8'));
+    assert.equal(lock.packages['node_modules/pipelane'].resolved.endsWith(`#${newSha}`), true);
+  } finally {
+    rmSync(consumerRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
+  }
+});
+
+test('CLI auto-update from a symlinked worktree updates the shared checkout', () => {
+  const { repoRoot, remoteRoot } = createRemoteBackedRepo();
+  const binDir = mkdtempSync(path.join(os.tmpdir(), 'pipelane-auto-update-bin-'));
+  const codexHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-codex-'));
+  const claudeHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-claude-'));
+  const pipelaneHome = mkdtempSync(path.join(os.tmpdir(), 'pipelane-home-'));
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  try {
+    runCli(['init', '--project', 'Demo App'], repoRoot);
+    writeFakeConsumer(repoRoot, { installedVersion: '0.2.0', installedSha: oldSha });
+    execFileSync('git', ['add', 'package.json', 'package-lock.json', '.pipelane.json'], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    execFileSync('git', ['commit', '-m', 'Adopt fake pipelane install'], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    execFileSync('git', ['push'], { cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe'] });
+    mkdirSync(path.join(repoRoot, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(
+      path.join(repoRoot, 'node_modules', '.bin', 'pipelane'),
+      '#!/bin/sh\necho "REEXEC:$*"\n',
+      { mode: 0o755, encoding: 'utf8' },
+    );
+
+    const worktreePath = path.join(repoRoot, '.claude', 'worktrees', 'auto-update-symlink');
+    execFileSync('git', ['worktree', 'add', worktreePath, '-b', 'auto-update-symlink'], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    makeFakeUpdateBin(binDir, { latestSha: newSha });
+
+    const result = spawnSync('node', [CLI_PATH, 'run', 'status', '--json'], {
+      cwd: worktreePath,
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        CLAUDE_HOME: claudeHome,
+        PIPELANE_HOME: pipelaneHome,
+        PIPELANE_AUTO_UPDATE: '1',
+        PIPELANE_AUTO_UPDATE_TTL_MS: '0',
+        PATH: `${binDir}:${process.env.PATH}`,
+      },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'REEXEC:run status --json');
+    assert.match(result.stderr, /\[pipelane\] Linked node_modules into worktree/);
+    assert.match(result.stderr, /Auto-updating pipelane 1111111 -> 2222222/);
+    const sharedLock = JSON.parse(readFileSync(path.join(repoRoot, 'package-lock.json'), 'utf8'));
+    const worktreeLock = JSON.parse(readFileSync(path.join(worktreePath, 'package-lock.json'), 'utf8'));
+    assert.equal(sharedLock.packages['node_modules/pipelane'].resolved.endsWith(`#${newSha}`), true);
+    assert.equal(worktreeLock.packages['node_modules/pipelane'].resolved.endsWith(`#${oldSha}`), true);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(remoteRoot, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(codexHome, { recursive: true, force: true });
+    rmSync(claudeHome, { recursive: true, force: true });
+    rmSync(pipelaneHome, { recursive: true, force: true });
+  }
+});
 
 test('update reports up-to-date when installed sha matches remote main', () => {
   const consumerRoot = mkdtempSync(path.join(os.tmpdir(), 'pipelane-update-consumer-'));

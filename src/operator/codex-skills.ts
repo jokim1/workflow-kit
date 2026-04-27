@@ -129,11 +129,6 @@ shift
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 local_bin="$repo_root/node_modules/.bin/pipelane"
-if [ -x "$local_bin" ]; then
-  cd "$repo_root"
-  exec "$local_bin" run "$command" "$@"
-fi
-
 codex_home="\${CODEX_HOME:-\${HOME:-}/.codex}"
 global_bin="$codex_home/skills/.pipelane/bin/pipelane"
 if [ -x "$global_bin" ]; then
@@ -141,6 +136,11 @@ if [ -x "$global_bin" ]; then
   export PIPELANE_MANAGED_RUNTIME=1
   export PIPELANE_MANAGED_RUNTIME_ROOT="$codex_home/skills/.pipelane"
   exec "$global_bin" run "$command" "$@"
+fi
+
+if [ -x "$local_bin" ]; then
+  cd "$repo_root"
+  exec "$local_bin" run "$command" "$@"
 fi
 
 echo "pipelane is unavailable for this repo." >&2
