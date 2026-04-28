@@ -11,6 +11,7 @@ import {
   type DestinationPlan,
   type DestinationStep,
 } from './destination-planner.ts';
+import { sanitizeForTerminal } from './commands/helpers.ts';
 import type { ParsedOperatorArgs } from './state.ts';
 
 export const DESTINATION_INTERNAL_STEP_ENV = 'PIPELANE_DESTINATION_INTERNAL_STEP';
@@ -33,30 +34,47 @@ export interface DestinationRouteExecution {
   steps: DestinationRouteStepExecution[];
 }
 
-export async function confirmDestinationRoute(plan: DestinationPlan, parsed: ParsedOperatorArgs): Promise<boolean> {
-  if (parsed.flags.yes) return true;
-  if (parsed.flags.plan) return false;
-  if (!process.stdin.isTTY) return false;
+export type DestinationRouteConfirmation = 'run_all' | 'run_next' | 'cancel';
 
+export interface DestinationRouteExecutionOptions {
+  stopAfterFirstExecutableStep?: boolean;
+}
+
+export async function confirmDestinationRoute(plan: DestinationPlan, parsed: ParsedOperatorArgs): Promise<DestinationRouteConfirmation> {
+  if (parsed.flags.yes) return 'run_all';
+  if (parsed.flags.plan) return 'cancel';
+  if (!process.stdin.isTTY) return 'cancel';
+
+  process.stderr.write(`${routeActionChoicesMessage(plan, parsed)}\n`);
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   try {
-    const answer = (await rl.question('Type Y to continue: (Y/n) ')).trim().toLowerCase();
-    return answer === '' || answer === 'y' || answer === 'yes';
+    const answer = (await rl.question('Enter 1, 2, or 3 [1]: ')).trim().toLowerCase();
+    if (answer === '' || answer === '1' || answer === 'y' || answer === 'yes') return 'run_all';
+    if (answer === '2') return 'run_next';
+    return 'cancel';
   } finally {
     rl.close();
   }
 }
 
 export function nonTtyConfirmationMessage(plan: DestinationPlan): string {
+  return nonTtyConfirmationMessageForParsed(plan, null);
+}
+
+export function nonTtyConfirmationMessageForParsed(plan: DestinationPlan, parsed: ParsedOperatorArgs | null): string {
   return [
-    `${plan.targetCommand} needs confirmation before running:`,
-    `  ${plan.remainingSteps.map((step) => step.command).join(' -> ')}`,
+    routeActionChoicesMessage(plan, parsed),
     '',
-    'Re-run from a TTY, pass --yes, or use the API confirm-token flow.',
+    'Reply with 1, 2, or 3. For a raw shell, use --yes for option 1 or run the option 2 command directly.',
   ].join('\n');
 }
 
-export function executeDestinationRoute(cwd: string, parsed: ParsedOperatorArgs, plan: DestinationPlan): DestinationRouteExecution {
+export function executeDestinationRoute(
+  cwd: string,
+  parsed: ParsedOperatorArgs,
+  plan: DestinationPlan,
+  options: DestinationRouteExecutionOptions = {},
+): DestinationRouteExecution {
   const execution: DestinationRouteExecution = {
     completed: true,
     failedStep: null,
@@ -102,14 +120,131 @@ export function executeDestinationRoute(cwd: string, parsed: ParsedOperatorArgs,
       execution.failedStep = step.command;
       return execution;
     }
-
     const nextPlan = replanDestination(cwd, parsed);
     const progressBlocker = validateStepProgress(plan, currentPlan, nextPlan, step);
     if (progressBlocker) {
       return failRouteGuard(execution, step.command, progressBlocker);
     }
     currentPlan = nextPlan;
+    if (options.stopAfterFirstExecutableStep) {
+      return execution;
+    }
   }
+}
+
+function routeActionChoicesMessage(plan: DestinationPlan, parsed: ParsedOperatorArgs | null): string {
+  const executableSteps = plan.remainingSteps.filter((step) => step.id !== 'review_gate');
+  const nextStep = executableSteps[0];
+  const allSteps = formatCommandSequence(executableSteps, parsed, plan);
+  const mergeStep = plan.remainingSteps.find((step) => step.id === 'merge');
+  const mergeCommand = mergeStep ? formatRunnableStepCommand(mergeStep, parsed, plan) : '/merge';
+  const stepNoun = executableSteps.length === 1 ? 'step' : 'steps';
+  const reviewGateLine = plan.remainingSteps.some((step) => step.id === 'review_gate')
+    ? [`Review checks are still required; ${mergeCommand} will watch them before merging.`, '']
+    : [];
+
+  return [
+    `The current task is at ${currentPhaseLabel(plan)}. ${sanitizeForTerminal(plan.targetCommand)} would move it through ${executableSteps.length} remaining ${stepNoun}.`,
+    '',
+    `Progress to ${sanitizeForTerminal(plan.targetCommand)}:`,
+    ...routeChecklistLines(plan),
+    '',
+    ...reviewGateLine,
+    'Choose the action to take:',
+    `1. Continue to ${sanitizeForTerminal(plan.targetCommand)}: run ${allSteps}`,
+    nextStep ? `2. Take one step only: run ${formatRunnableStepCommand(nextStep, parsed, plan)}` : '2. Take one step only: no next step is available',
+    '3. Cancel',
+  ].join('\n');
+}
+
+function routeChecklistLines(plan: DestinationPlan): string[] {
+  const routeSteps = [...plan.satisfiedSteps, ...plan.remainingSteps]
+    .filter((step) => step.id !== 'review_gate');
+  const seen = new Set<DestinationMilestone>();
+  const checklist: Array<{ milestone: DestinationMilestone; label: string }> = [];
+
+  if (plan.currentMilestone === 'local_dirty') {
+    checklist.push({ milestone: 'local_dirty', label: 'Local changes' });
+    seen.add('local_dirty');
+  } else if (!routeSteps.some((step) => step.milestone === plan.currentMilestone)) {
+    checklist.push({ milestone: plan.currentMilestone, label: milestoneChecklistLabel(plan.currentMilestone) });
+    seen.add(plan.currentMilestone);
+  }
+
+  for (const step of routeSteps) {
+    if (seen.has(step.milestone)) continue;
+    seen.add(step.milestone);
+    checklist.push({ milestone: step.milestone, label: step.label });
+  }
+
+  return checklist.map((entry) => {
+    const marker = destinationMilestoneRank(entry.milestone) <= destinationMilestoneRank(plan.currentMilestone)
+      ? '[x]'
+      : '[ ]';
+    const current = entry.milestone === plan.currentMilestone ? ' (current)' : '';
+    return `${marker} ${entry.label}${current}`;
+  });
+}
+
+function milestoneChecklistLabel(milestone: DestinationMilestone): string {
+  switch (milestone) {
+    case 'local_dirty': return 'Local changes';
+    case 'pr_open': return 'PR opened';
+    case 'merged': return 'Merged';
+    case 'staging_deployed': return 'Staging deployed';
+    case 'staging_smoked': return 'Staging smoked';
+    case 'prod_deployed': return 'Production deployed';
+  }
+}
+
+function currentPhaseLabel(plan: DestinationPlan): string {
+  switch (plan.currentMilestone) {
+    case 'local_dirty': return 'local changes';
+    case 'pr_open': return 'PR opened';
+    case 'merged': return 'merged';
+    case 'staging_deployed': return 'staging deployed';
+    case 'staging_smoked': return 'staging smoked';
+    case 'prod_deployed': return 'production deployed';
+  }
+}
+
+function formatCommandSequence(steps: DestinationStep[], parsed: ParsedOperatorArgs | null, plan: DestinationPlan): string {
+  const commands = steps.map((step) => formatRunnableStepCommand(step, parsed, plan));
+  if (commands.length === 0) return 'no remaining commands';
+  if (commands.length === 1) return commands[0];
+  if (commands.length === 2) return `${commands[0]}, then ${commands[1]}`;
+  return `${commands.slice(0, -1).join(', ')}, then ${commands.at(-1)}`;
+}
+
+function formatRunnableStepCommand(
+  step: DestinationStep,
+  parsed: ParsedOperatorArgs | null,
+  plan: DestinationPlan,
+): string {
+  if (!parsed) return sanitizeForTerminal(step.command);
+  const args = buildStepArgs(step, parsed, plan).slice(stepCommandPrefixLength(step));
+  if (args.length === 0) return sanitizeForTerminal(step.command);
+  return `${sanitizeForTerminal(step.command)} ${args.map(formatCommandArgument).join(' ')}`;
+}
+
+function stepCommandPrefixLength(step: DestinationStep): number {
+  switch (step.id) {
+    case 'pr':
+    case 'merge':
+      return 1;
+    case 'deploy_staging':
+    case 'smoke_staging':
+    case 'deploy_prod':
+      return 2;
+    case 'review_gate':
+      return 0;
+  }
+}
+
+function formatCommandArgument(arg: string): string {
+  const sanitized = sanitizeForTerminal(arg);
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(sanitized)) return sanitized;
+  return JSON.stringify(sanitized);
 }
 
 function buildStepEnv(step: DestinationStep, plan: DestinationPlan): NodeJS.ProcessEnv {

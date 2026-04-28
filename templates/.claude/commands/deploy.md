@@ -20,7 +20,10 @@ prompt to the human rather than auto-answering. For scripted or CI prod deploys,
 the deploy through `pipelane run api action deploy.prod --execute --confirm-token <t>`
 using the token issued by a prior `api action deploy.prod` preflight.
 
-Display the output directly. Report the environment, SHA, surfaces, and next step using slash commands only.
+Display the output directly. If the output prints "Choose the action to take:",
+ask the user to pick one of the printed choices; do not reduce it to "rerun with
+--yes". When the user picks a runnable choice, run the matching slash command.
+Report the environment, SHA, surfaces, and next step using slash commands only.
 
 <!-- pipelane:consumer-extension:start -->
 <!-- pipelane:consumer-extension:end -->

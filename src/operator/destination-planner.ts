@@ -18,6 +18,7 @@ import {
   loadDeployState,
   loadTaskLock,
   loadPrRecord,
+  formatWorkflowCommand,
   printResult,
   resolveWorkflowContext,
   runGit,
@@ -476,29 +477,34 @@ function formatDestinationCommand(context: WorkflowContext, parsed: ParsedOperat
   return alias;
 }
 
-function buildRoute(mode: 'build' | 'release', target: DestinationMilestone, includeSmoke: boolean): DestinationStep[] {
+function buildRoute(
+  mode: 'build' | 'release',
+  target: DestinationMilestone,
+  includeSmoke: boolean,
+  config: WorkflowConfig,
+): DestinationStep[] {
   const route: DestinationStep[] = [
-    { id: 'pr', command: '/pr', label: 'PR opened', milestone: 'pr_open' },
+    { id: 'pr', command: formatWorkflowCommand(config, 'pr'), label: 'PR opened', milestone: 'pr_open' },
     { id: 'review_gate', command: 'review gate', label: 'Review gate', milestone: 'pr_open' },
-    { id: 'merge', command: '/merge', label: 'Merged', milestone: 'merged' },
+    { id: 'merge', command: formatWorkflowCommand(config, 'merge'), label: 'Merged', milestone: 'merged' },
   ];
   const needsStagingStep = target === 'staging_deployed'
     || target === 'staging_smoked'
     || (mode === 'release' && target === 'prod_deployed');
   if (needsStagingStep) {
-    route.push({ id: 'deploy_staging', command: '/deploy staging', label: 'Staging deployed', milestone: 'staging_deployed' });
+    route.push({ id: 'deploy_staging', command: formatWorkflowCommand(config, 'deploy', 'staging'), label: 'Staging deployed', milestone: 'staging_deployed' });
     if (target === 'staging_smoked' || (mode === 'release' && includeSmoke)) {
-      route.push({ id: 'smoke_staging', command: '/smoke staging', label: 'Staging smoked', milestone: 'staging_smoked' });
+      route.push({ id: 'smoke_staging', command: formatWorkflowCommand(config, 'smoke', 'staging'), label: 'Staging smoked', milestone: 'staging_smoked' });
     }
   }
   if (target === 'prod_deployed') {
-    route.push({ id: 'deploy_prod', command: '/deploy prod', label: 'Production deployed', milestone: 'prod_deployed' });
+    route.push({ id: 'deploy_prod', command: formatWorkflowCommand(config, 'deploy', 'prod'), label: 'Production deployed', milestone: 'prod_deployed' });
   }
   return route;
 }
 
 function buildRouteForSnapshot(snapshot: DestinationSnapshot, target: DestinationMilestone): DestinationStep[] {
-  const route = buildRoute(snapshot.mode, target, snapshot.smoke.stagingConfigured || snapshot.smoke.requireStagingSmoke);
+  const route = buildRoute(snapshot.mode, target, snapshot.smoke.stagingConfigured || snapshot.smoke.requireStagingSmoke, snapshot.config);
   if (snapshot.explicitDeploySha) {
     return route.filter((step) => step.id !== 'pr' && step.id !== 'review_gate' && step.id !== 'merge');
   }

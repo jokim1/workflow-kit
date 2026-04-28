@@ -49,7 +49,10 @@ Setup flags (accepted only on `smoke setup`):
 - `--critical-path=<surface-or-path>` — repeatable; deduped, first-seen order preserved.
 - `--critical-path-coverage=warn|block` — how /deploy prod treats uncovered critical paths.
 
-Display the output directly and keep the environment explicit.
+Display the output directly and keep the environment explicit. If the output
+prints "Choose the action to take:", ask the user to pick one of the printed
+choices; do not reduce it to "rerun with --yes". When the user picks a runnable
+choice, run the matching slash command.
 
 ## Guided empty states
 

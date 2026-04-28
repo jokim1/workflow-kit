@@ -120,6 +120,9 @@ Run ${commandLabel}.
 3. Run:
    \`${runnerCommand}\`
 4. Stream the command output directly.
+5. If the output prints "Choose the action to take:", ask the user to pick one
+   of the printed choices. Do not reduce it to "rerun with --yes"; when the
+   user picks a runnable choice, run the matching command.
 ${renderWorkflowSkillGuidance(options.command, options.slashAlias)}
 `;
 }

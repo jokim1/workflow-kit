@@ -126,6 +126,9 @@ Run the repo-native pipelane command currently mapped to ${slashAlias}.
 3. Run:
    \`"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.agents/skills/${MANAGED_CODEX_RUNNER}" ${command} <parsed arguments>\`
 4. Stream the command output directly.
+5. If the output prints "Choose the action to take:", ask the user to pick one
+   of the printed choices. Do not reduce it to "rerun with --yes"; when the
+   user picks a runnable choice, run the matching command.
 ${buildWorkflowSkillGuidance(command, slashAlias)}
 `;
 }

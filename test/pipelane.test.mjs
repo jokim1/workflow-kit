@@ -6637,8 +6637,13 @@ test('lockless PR branch can report, merge by PR number, and deploy the merged P
 
     const openDeploy = runCli(['run', 'deploy', 'staging', '--pr', '1', '--json'], repoRoot, env, true);
     assert.equal(openDeploy.status, 1);
-    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /\/merge -> \/deploy staging/);
-    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /needs confirmation/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /The current task is at PR opened/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /\[x\] PR opened \(current\)/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /\[ \] Merged/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /\[ \] Staging deployed/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /1\. Continue to \/deploy staging: run \/merge --pr 1, then \/deploy staging --pr 1/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /2\. Take one step only: run \/merge --pr 1/);
+    assert.match(`${openDeploy.stdout}\n${openDeploy.stderr}`, /3\. Cancel/);
     assert.equal(existsSync(lockPath), false, 'failed lockless deploy must not recreate the task lock');
 
     const currentBranch = run('git', ['branch', '--show-current'], repoRoot);
@@ -12034,6 +12039,7 @@ test('new does not warn when under the WIP threshold', () => {
   const { repoRoot } = createRemoteBackedRepo();
   try {
     runCli(['init', '--project', 'Demo App'], repoRoot);
+    commitAll(repoRoot, 'Adopt pipelane');
     const result = runCli(['run', 'new', '--task', 'only-task'], repoRoot);
     assert.equal(result.status, 0);
     assert.ok(!/tasks in flight/.test(result.stderr),

@@ -9,7 +9,7 @@ import {
   confirmDestinationRoute,
   DESTINATION_INTERNAL_STEP_ENV,
   executeDestinationRoute,
-  nonTtyConfirmationMessage,
+  nonTtyConfirmationMessageForParsed,
 } from '../destination-executor.ts';
 import { printResult, type ParsedOperatorArgs } from '../state.ts';
 
@@ -45,7 +45,7 @@ export async function maybeHandleDestinationCommand(cwd: string, parsed: ParsedO
   if (!parsed.flags.yes && !process.stdin.isTTY) {
     printDestinationPlan(parsed.flags, {
       ...plan,
-      message: `${plan.message}\n\n${nonTtyConfirmationMessage(plan)}`,
+      message: `${plan.message}\n\n${nonTtyConfirmationMessageForParsed(plan, parsed)}`,
     });
     process.exitCode = 1;
     return true;
@@ -57,12 +57,14 @@ export async function maybeHandleDestinationCommand(cwd: string, parsed: ParsedO
     printDestinationPlan(parsed.flags, plan);
   }
 
-  const confirmed = await confirmDestinationRoute(plan, parsed);
-  if (!confirmed) {
+  const confirmation = await confirmDestinationRoute(plan, parsed);
+  if (confirmation === 'cancel') {
     return true;
   }
 
-  const execution = executeDestinationRoute(cwd, parsed, plan);
+  const execution = executeDestinationRoute(cwd, parsed, plan, {
+    stopAfterFirstExecutableStep: confirmation === 'run_next',
+  });
   if (!execution.completed) {
     const failedOutput = execution.steps
       .filter((step) => step.exitCode !== 0)
@@ -82,10 +84,13 @@ export async function maybeHandleDestinationCommand(cwd: string, parsed: ParsedO
     throw new Error(message);
   }
   if (parsed.flags.json) {
+    const completedStep = execution.steps.at(-1)?.command ?? 'next step';
     printResult(parsed.flags, {
       ...plan,
       execution,
-      message: `Completed route to ${plan.targetCommand}.`,
+      message: confirmation === 'run_next'
+        ? `Completed ${completedStep}; route to ${plan.targetCommand} was not continued.`
+        : `Completed route to ${plan.targetCommand}.`,
     });
   }
   return true;
