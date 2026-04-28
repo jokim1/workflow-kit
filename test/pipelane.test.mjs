@@ -4320,6 +4320,8 @@ test('new links shared node_modules into a created sibling worktree when availab
     const linkedNodeModules = path.join(created.worktreePath, 'node_modules');
     assert.ok(lstatSync(linkedNodeModules).isSymbolicLink());
     assert.equal(realpathSync(linkedNodeModules), realpathSync(path.join(repoRoot, 'node_modules')));
+    assert.match(created.message, /Dependency setup notes:/);
+    assert.doesNotMatch(created.message, /\nWarnings:\n- node_modules in this worktree/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
@@ -4364,6 +4366,8 @@ test('repo-guard links shared node_modules when it creates a new isolated worktr
     const linkedNodeModules = path.join(guarded.lock.worktreePath, 'node_modules');
     assert.ok(lstatSync(linkedNodeModules).isSymbolicLink());
     assert.equal(realpathSync(linkedNodeModules), realpathSync(path.join(repoRoot, 'node_modules')));
+    assert.match(guarded.message, /Dependency setup note: node_modules in this worktree is a symlink/);
+    assert.doesNotMatch(guarded.message, /Warning: node_modules in this worktree is a symlink/);
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(remoteRoot, { recursive: true, force: true });
@@ -4456,6 +4460,7 @@ test('bootstrapWorktreeNodeModulesIfNeeded symlinks an externally-created worktr
     const result = taskWorkspaces.bootstrapWorktreeNodeModulesIfNeeded(worktreePath);
     assert.equal(result.kind, 'symlinked');
     assert.match(result.message, /Linked node_modules/);
+    assert.match(result.message, /Dependency setup note: node_modules in this worktree is a symlink/);
     // The success message must also surface the npm-wipes-shared-deps warning —
     // the audience for auto-bootstrap (agents, fresh users) is exactly who
     // needs this safety note. `pipelane:new` already does this via its
@@ -4546,6 +4551,7 @@ test('CLI auto-bootstraps node_modules in an externally-created worktree before 
     assert.ok(lstatSync(linkedNodeModules).isSymbolicLink());
     assert.equal(realpathSync(linkedNodeModules), realpathSync(path.join(repoRoot, 'node_modules')));
     assert.match(result.stderr, /\[pipelane\] Linked node_modules/);
+    assert.match(result.stderr, /Dependency setup note: node_modules in this worktree is a symlink/);
     // npm-wipes-shared-deps warning must reach stderr too, not just the
     // programmatic result — this is the safety note the auto-bootstrap
     // audience needs most.
@@ -14840,6 +14846,7 @@ test('setup without --yes prints the AGENTS.md migration proposal without rewrit
     assert.match(result.stdout, /current: - Agent default workflow: `npm run workflow:new -- --task "task name"`\./);
     assert.match(result.stdout, /proposed: - Agent default workflow: `\/new`\./);
     assert.match(result.stdout, /AGENTS\.md:3/);
+    assert.match(result.stdout, /avoid npm-script PATH failures before node_modules is linked/);
     assert.match(result.stdout, /prevent placeholder task names from creating stray worktrees/);
     assert.match(result.stdout, /pipelane setup --yes/);
     assert.match(readFileSync(agentsPath, 'utf8'), /npm run workflow:new/);

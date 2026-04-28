@@ -80,6 +80,10 @@ export const SHARED_NODE_MODULES_NPMCI_WARNING =
   '`rm node_modules && npm install` (the `rm` only removes the symlink, ' +
   'not its target).';
 
+export function isSharedNodeModulesSetupNote(message: string): boolean {
+  return message === SHARED_NODE_MODULES_NPMCI_WARNING;
+}
+
 export function ensureSharedNodeModulesLink(
   commonDir: string,
   worktreePath: string,
@@ -178,7 +182,7 @@ export function bootstrapWorktreeNodeModulesIfNeeded(cwd: string): WorktreeBoots
       kind: 'symlinked',
       message:
         `[pipelane] Linked node_modules into worktree from shared repo at ${sharedRepoRoot}.\n` +
-        `[pipelane] ${SHARED_NODE_MODULES_NPMCI_WARNING}`,
+        `[pipelane] Dependency setup note: ${SHARED_NODE_MODULES_NPMCI_WARNING}`,
     };
   }
   return { kind: 'error', message: result };
@@ -309,6 +313,8 @@ export function buildTaskWorkspaceOutput(options: {
   message: string;
 } {
   const warnings = options.warnings ?? [];
+  const dependencySetupNotes = warnings.filter(isSharedNodeModulesSetupNote);
+  const userWarnings = warnings.filter((warning) => !isSharedNodeModulesSetupNote(warning));
   const reasons = options.reasons ?? [];
   const worktreeDisplayPath = formatWorktreeDisplayPath(options.repoRoot, options.worktreePath);
   const nextAction = `Switch this chat/workspace to ${worktreeDisplayPath}, then continue the task there.`;
@@ -325,9 +331,14 @@ export function buildTaskWorkspaceOutput(options: {
     lines.push(`Last logged step: ${lockNextAction}`);
   }
 
-  if (warnings.length > 0) {
+  if (userWarnings.length > 0) {
     lines.push('Warnings:');
-    lines.push(...warnings.map((warning) => `- ${warning}`));
+    lines.push(...userWarnings.map((warning) => `- ${warning}`));
+  }
+
+  if (dependencySetupNotes.length > 0) {
+    lines.push('Dependency setup notes:');
+    lines.push(...dependencySetupNotes.map((note) => `- ${note}`));
   }
 
   if (reasons.length > 0) {

@@ -14,6 +14,7 @@ import {
 import {
   ensureSharedNodeModulesLink,
   generateUniqueTaskWorkspace,
+  isSharedNodeModulesSetupNote,
   readWorktreeStatus,
   resolveTaskBaseRef,
   resolveTaskCommandIdentity,
@@ -98,7 +99,9 @@ export async function handleRepoGuard(cwd: string, parsed: ParsedOperatorArgs): 
       `Branch: ${workspace.branchName}`,
       `Worktree: ${workspace.worktreePath}`,
       ...baseRef.warnings.map((warning) => `Warning: ${warning}`),
-      ...(nodeModulesWarning ? [`Warning: ${nodeModulesWarning}`] : []),
+      ...(nodeModulesWarning
+        ? [`${isSharedNodeModulesSetupNote(nodeModulesWarning) ? 'Dependency setup note' : 'Warning'}: ${nodeModulesWarning}`]
+        : []),
       'Why:',
       ...reasons.map((reason) => `- ${reason}`),
     ].join('\n'),

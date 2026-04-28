@@ -801,7 +801,7 @@ export function formatAgentsGuidanceMigrations(migrations: AgentsGuidanceMigrati
   }
   return [
     ...lines,
-    'These updates keep task starts on the slash-command path and prevent placeholder task names from creating stray worktrees.',
+    'These updates keep task starts on the managed slash-command path, avoid npm-script PATH failures before node_modules is linked, and prevent placeholder task names from creating stray worktrees.',
   ];
 }
 
